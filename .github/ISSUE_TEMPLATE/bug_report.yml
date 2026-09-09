@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible Relay problem
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Relay, Python, Git, operating system, and Kiro IDE/CLI versions
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction in a disposable repository
+      description: Include commands, expected behavior, and actual behavior. Remove private source code.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: Relay status and error output
+      description: Include relay status --json if available. Never upload private .git objects or snapshots.

@@ -1,0 +1,15 @@
+name: Feature request
+description: Propose a workflow improvement or harness adapter
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Workflow and problem
+      description: Describe the human/agent workflow and what Relay should make possible.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Proposed behavior
+      description: Include how staging, reviewed checkpoints, and pending changes should behave.
