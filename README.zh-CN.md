@@ -33,7 +33,17 @@ unstaged changes 或未跟踪新文件的形式显示。
 需要 **Python 3.10+**、**Git 2.37+**，以及 Linux、macOS 或 WSL。Python 运行时没有第三方依赖。
 首个支持的 harness 是 Kiro IDE 1.x / CLI 3.x。
 
-可以仅使用 Python 标准库，从仓库构建独立可执行文件：
+默认使用 [pipx](https://pipx.pypa.io/) 安装已发布的 CLI：
+
+```bash
+pipx install agent-session-relay
+relay --version
+```
+
+以后可通过 `pipx upgrade agent-session-relay` 升级。如果 PATH 中还找不到 `relay`，请执行一次
+`pipx ensurepath`，再打开新的终端。
+
+也可以仅使用 Python 标准库，从仓库构建独立可执行文件：
 
 ```bash
 git clone https://github.com/Vopaaz/Agent-Session-Relay.git
@@ -48,8 +58,8 @@ relay --version
 按需将 PATH 设置加入 shell 配置。该归档可在支持的平台之间使用，但仍依赖 PATH 中的 Python 和 Git。
 构建同时生成 `dist/relay.pyz.sha256` 校验文件。
 
-也可在仓库中执行 `pipx install .`，或在虚拟环境里执行 `python -m pip install .`，不依赖 PyPI
-发布。开发时可直接使用 `./relay`。
+从源码 checkout 安装时，可执行 `pipx install .`，或在虚拟环境里执行 `python -m pip install .`。
+开发时可直接使用 `./relay`。
 
 Finish 前请配置 Git 的 `user.name` 和 `user.email`，最终公开 commit 使用你的正常 Git 身份。
 内部快照和 abort recovery 在未配置该身份时也可以创建。

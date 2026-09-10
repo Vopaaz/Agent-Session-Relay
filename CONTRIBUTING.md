@@ -47,7 +47,27 @@ project. The tool guard is a workflow aid, not a security boundary against arbit
 
 ## Releases
 
-Update the version in `pyproject.toml` and `src/agent_session_relay/__init__.py`, run tests and lint,
-and build the archive. A `v*` tag triggers the workflow that creates a **draft** GitHub release
-containing `relay.pyz` and its SHA-256 checksum. A maintainer reviews and publishes the draft.
-Python packaging is supported from the checkout; this repository does not assume a PyPI publication.
+The package version has one source of truth: `src/agent_session_relay/__init__.py`. Update it, then
+prepare and validate both PyPI distributions without uploading anything:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade build twine ruff
+python -m unittest discover -s tests -v
+ruff check .
+python scripts/build_pypi.py
+python scripts/build_zipapp.py
+```
+
+Inspect the files under `dist/pypi/` and test the wheel if desired. To publish them to the real PyPI,
+run the following explicit command; Twine will request your PyPI token if it is not configured:
+
+```bash
+python -m twine upload dist/pypi/*
+```
+
+For a rehearsal, use `python -m twine upload --repository testpypi dist/pypi/*` instead. A
+`v<version>` tag triggers a workflow that checks the tag against the package version and creates a
+**draft** GitHub release containing the validated wheel, source distribution, zipapp, and checksum.
+It never uploads to PyPI; a maintainer must run the Twine command separately and publish the draft.

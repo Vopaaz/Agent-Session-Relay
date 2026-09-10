@@ -1,6 +1,8 @@
 # Agent-Session-Relay
 
-[简体中文](README.zh-CN.md) · [Contributing](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
+[简体中文](https://github.com/Vopaaz/Agent-Session-Relay/blob/master/README.zh-CN.md) ·
+[Contributing](https://github.com/Vopaaz/Agent-Session-Relay/blob/master/CONTRIBUTING.md) ·
+[Architecture](https://github.com/Vopaaz/Agent-Session-Relay/blob/master/docs/architecture.md)
 
 **Use your normal Git staging UI to review an agent's work across multiple turns.**
 
@@ -34,7 +36,17 @@ Relay captures the agent's output and presents it as unstaged changes or untrack
 Requires **Python 3.10+**, **Git 2.37+**, and Linux, macOS, or WSL. There are no Python runtime
 dependencies. Kiro IDE 1.x / CLI 3.x is the first supported harness.
 
-Build a standalone executable from this repository with the standard library:
+Install the published CLI with [pipx](https://pipx.pypa.io/):
+
+```bash
+pipx install agent-session-relay
+relay --version
+```
+
+Upgrade it later with `pipx upgrade agent-session-relay`. If `relay` is not yet on PATH, run
+`pipx ensurepath` once and open a new terminal.
+
+Alternatively, build a standalone executable from this repository with the standard library:
 
 ```bash
 git clone https://github.com/Vopaaz/Agent-Session-Relay.git
@@ -49,8 +61,8 @@ relay --version
 Add that PATH setting to your shell configuration if needed. The archive is portable between supported
 platforms and still needs Python and Git on PATH. `dist/relay.pyz.sha256` contains its checksum.
 
-Alternatively, install from the checkout with `pipx install .`, or run `python -m pip install .`
-inside a virtual environment. A PyPI release is not required. Contributors can use `./relay` directly.
+To install from a checkout, use `pipx install .`, or run `python -m pip install .` inside a virtual
+environment. Contributors can use `./relay` directly.
 
 Configure Git's `user.name` and `user.email` before finishing a session; the final public commit uses
 your normal Git identity. Internal snapshots and abort recovery also work without that identity.
@@ -94,7 +106,7 @@ The adapter follows the [Kiro hook schema](https://kiro.dev/docs/hooks/),
 [event mapping](https://kiro.dev/docs/cli/v3/hooks-migration/),
 [command I/O contract](https://kiro.dev/docs/hooks/actions/), and
 [configuration scopes](https://kiro.dev/docs/configuration/).
-See [integration details and a live smoke test](docs/kiro.md).
+See [integration details and a live smoke test](https://github.com/Vopaaz/Agent-Session-Relay/blob/master/docs/kiro.md).
 
 ## Human commands
 
@@ -338,7 +350,8 @@ shell substitutions; it is not a security sandbox for arbitrary programs.
 
 Version 0.1 deliberately rejects sparse checkouts, submodules/embedded repositories, and
 assume-unchanged/skip-worktree flags instead of taking incomplete snapshots. Git ignore rules,
-attributes, and clean/smudge filters apply normally. See [security scope](SECURITY.md).
+attributes, and clean/smudge filters apply normally. See
+[security scope](https://github.com/Vopaaz/Agent-Session-Relay/blob/master/SECURITY.md).
 
 ## Develop
 
@@ -347,6 +360,8 @@ python3 -m unittest discover -s tests -v
 python3 scripts/build_zipapp.py
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release checks.
+See [CONTRIBUTING.md](https://github.com/Vopaaz/Agent-Session-Relay/blob/master/CONTRIBUTING.md)
+for development and release checks.
 
-Copyright 2026 Agent-Session-Relay contributors. Licensed under [Apache-2.0](LICENSE).
+Copyright 2026 Agent-Session-Relay contributors. Licensed under
+[Apache-2.0](https://github.com/Vopaaz/Agent-Session-Relay/blob/master/LICENSE).
