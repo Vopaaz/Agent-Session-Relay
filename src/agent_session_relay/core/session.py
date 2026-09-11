@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from .errors import RelayError
@@ -47,7 +48,77 @@ class Relay:
         self.git.pin(self.prefix(session) + label, commit)
         return commit
 
-    def start(self) -> dict:
+    @staticmethod
+    def validate_message(message: str) -> str:
+        message = message.strip()
+        if not message:
+            raise RelayError("Provide a non-empty, custom message describing this session's work.")
+        return message
+
+    def session_message(self, session: dict) -> str | None:
+        ref = self.prefix(session) + "message"
+        commit = self.git.refs(ref).get(ref)
+        return self.git.commit_message(commit) if commit else None
+
+    def write_message(self, session: dict, message: str) -> None:
+        # A single atomic ref update is the entire mutation: HEAD, index, and state stay intact.
+        commit = self.git.commit(
+            self.git.tree(session["base_commit"]), session["base_commit"], message
+        )
+        self.git.pin(self.prefix(session) + "message", commit)
+
+    def set_message(
+        self,
+        message: str | None = None,
+        name: str | None = None,
+        *,
+        editor: Callable[[str | None], str] | None = None,
+    ) -> dict:
+        with self.store.lock():
+            self.store.assert_ready()
+            state = self.store.load()
+            if name is None:
+                session = self.active(state, required=False) or self.select_suspended(state, None)
+            else:
+                candidates = [s for s in state["sessions"].values() if s["id"].startswith(name)]
+                if len(candidates) != 1:
+                    raise RelayError(
+                        "Session ID must match exactly one session. Use `relay list`."
+                    )
+                session = candidates[0]
+            if message is not None:
+                message = self.validate_message(message)
+                self.write_message(session, message)
+                return {**session, "message": message}
+            if editor is None:
+                raise RelayError("Provide a session message or a message editor.")
+            initial = self.session_message(session)
+
+        # Interactive input must not block status, hooks, or other Relay commands.
+        message = self.validate_message(editor(initial))
+        with self.store.lock():
+            self.store.assert_ready()
+            current = self.store.load()["sessions"].get(session["id"])
+            if current is None or self.session_message(current) != initial:
+                raise RelayError(
+                    "Message editing cancelled: the session ended or its message changed "
+                    "while the editor was open. Retry with the current session."
+                )
+            self.write_message(current, message)
+            return {**current, "message": message}
+
+    def list_sessions(self) -> list[dict]:
+        self.store.assert_ready()
+        if not self.store.load()["sessions"]:
+            return []
+        with self.store.lock():
+            self.store.assert_ready()
+            return [
+                {**session, "message": self.session_message(session)}
+                for session in self.store.load()["sessions"].values()
+            ]
+
+    def start(self, message: str | None = None) -> dict:
         with self.store.lock():
             self.store.assert_ready()
             state = self.store.load()
@@ -59,6 +130,8 @@ class Relay:
             except RelayError as exc:
                 raise RelayError("Create an initial Git commit before starting Relay.") from exc
             sid = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
+            if message is not None:
+                message = self.validate_message(message)
             session = {
                 "id": sid,
                 "state": "active",
@@ -74,11 +147,13 @@ class Relay:
             with self.store.transaction(state, sid, "start", self.git.tree(origin["commit"])):
                 self.git.pin(self.prefix(session) + "base", origin["commit"], create=True)
                 self.git.pin(self.prefix(session) + "reviewed", origin["commit"], create=True)
+                if message is not None:
+                    self.write_message(session, message)
                 self.git.set_head({"ref": None, "commit": origin["commit"]})
                 state["sessions"][sid] = session
                 state["active"] = sid
                 self.store.save(state)
-            return copy.deepcopy(session)
+            return {**copy.deepcopy(session), "message": message}
 
     def handoff(self, owner: str | None = None) -> bool:
         # Inactive hooks must not even create the Relay directory or its lock file.
@@ -222,39 +297,72 @@ class Relay:
                 self.store.save(state)
             return copy.deepcopy(session)
 
-    def finish(self, message: str | None = None) -> str:
-        with self.store.lock():
-            self.store.assert_ready()
-            state = self.store.load()
-            session = self.active(state)
-            self.validate(session)
-            workspace = self.git.workspace_tree(session["reviewed"])
-            approved = self.git.index_tree()
-            if workspace != approved:
-                raise RelayError(
-                    "Pending changes remain. Review and stage (or discard) all unstaged "
-                    "changes and non-ignored untracked files before `relay finish`."
-                )
-            branch = f"relay/result/{session['id']}"
-            ref = "refs/heads/" + branch
-            # Public history has exactly one parent and no internal checkpoints.
-            commit = self.git.commit(
-                approved,
-                session["base_commit"],
-                message or f"Complete Relay session {session['id']}",
-                internal=False,
-            )
-            with self.store.transaction(state, session["id"], "finish", workspace) as journal:
-                if self.git.refs(ref).get(ref):
+    def finish(
+        self, message: str | None = None, *, editor: Callable[[str | None], str] | None = None
+    ) -> str:
+        expected_session = None
+        # An editor may stay open for a long time. Release the lock while it runs, then
+        # repeat the full preflight with the captured session identity before committing.
+        while True:
+            with self.store.lock():
+                self.store.assert_ready()
+                state = self.store.load()
+                session = self.active(state, required=False)
+                if expected_session is not None and (
+                    session != expected_session or self.session_message(session) is not None
+                ):
                     raise RelayError(
-                        f"Result branch already exists: {branch}. It was not overwritten."
+                        "Finish cancelled: the session or its message changed while editing. "
+                        "Review the current session before retrying."
                     )
-                self.store.record_created_ref(journal, ref, commit)
-                self.git.pin(ref, commit, create=True)
-                self.git.set_head({"ref": ref, "commit": commit})
-                self.git.run("read-tree", commit)
-                self.remove_session(state, session)
-            return branch
+                session = self.active(state)
+                self.validate(session)
+                workspace = self.git.workspace_tree(session["reviewed"])
+                approved = self.git.index_tree()
+                if workspace != approved:
+                    if expected_session is not None:
+                        raise RelayError(
+                            "Finish cancelled: pending changes appeared while editing the message. "
+                            "Review and stage them before retrying."
+                        )
+                    raise RelayError(
+                        "Pending changes remain. Review and stage (or discard) all unstaged "
+                        "changes and non-ignored untracked files before `relay finish`."
+                    )
+                if message is None:
+                    message = self.session_message(session)
+                if message is not None:
+                    message = self.validate_message(message)
+                    branch = f"relay/result/{session['id']}"
+                    ref = "refs/heads/" + branch
+                    # Public history has exactly one parent and no internal checkpoints.
+                    commit = self.git.commit(
+                        approved, session["base_commit"], message, internal=False
+                    )
+                    with self.store.transaction(
+                        state, session["id"], "finish", workspace
+                    ) as journal:
+                        if self.git.refs(ref).get(ref):
+                            raise RelayError(
+                                f"Result branch already exists: {branch}. It was not overwritten."
+                            )
+                        self.store.record_created_ref(journal, ref, commit)
+                        self.git.pin(ref, commit, create=True)
+                        self.git.set_head({"ref": ref, "commit": commit})
+                        self.git.run("read-tree", commit)
+                        self.remove_session(state, session)
+                    return branch
+                if editor is None:
+                    raise RelayError(
+                        "A custom session message is required before finishing. "
+                        'Use `relay message -m "Describe the work"` or '
+                        '`relay finish -m "Describe the work"`.'
+                    )
+                # Fail before asking the human to write if their public identity is unavailable.
+                self.git.text("var", "GIT_AUTHOR_IDENT")
+                self.git.text("var", "GIT_COMMITTER_IDENT")
+                expected_session = copy.deepcopy(session)
+            message = self.validate_message(editor(None))
 
     def abort(self, expected_id: str) -> tuple[str, dict]:
         """The CLI collects TWO explicit confirmations before calling this mutation."""
@@ -322,6 +430,7 @@ class Relay:
             return {
                 "active": True,
                 "session": session["id"],
+                "message": self.session_message(session),
                 "lifecycle": session["state"],
                 "phase": session["phase"],
                 "turn": session["turn"],

@@ -34,7 +34,7 @@ class DistributionTests(RepositoryTest):
         return result
 
     def test_standalone_archive_runs_a_complete_session(self):
-        self.packed("start")
+        self.packed("start", "-m", "Update standalone token handling")
         status = json.loads(self.packed("agent", "status").stdout)
         self.packed("kiro", "hook", "prompt-submit", input="{}")
         self.write("Token.kt", "standalone proposal")
@@ -44,8 +44,10 @@ class DistributionTests(RepositoryTest):
         )
         self.packed("finish", ok=False)
         self.git("add", "Token.kt")
-        self.packed("finish", "-m", "Standalone result")
+        self.packed("message", "-m", "Refine standalone token handling")
+        self.packed("finish")
         self.assert_one_commit("relay/result/" + status["session"])
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "Refine standalone token handling\n")
         self.assert_clean()
 
     def test_standalone_archive_preserves_guard_exit_code(self):

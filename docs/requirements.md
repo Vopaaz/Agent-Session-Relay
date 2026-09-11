@@ -715,6 +715,21 @@ relay finish
 
 当前 staged changes可以在 finish 时直接纳入最终 reviewed state。
 
+每个 session 可以由用户填写本次工作的说明：
+
+* `relay start` 默认直接开始，不进入编辑器；可用 `-m "说明"` 设置；
+* `relay message [session] [-m "说明"]` 在过程中设置或修改；没有 `-m` 时打开 Git 编辑器，也支持 suspended session；
+* `relay finish -m "最终说明"` 可以覆盖此前保存的说明。
+
+说明正文使用 session 私有 Git ref 指向的原生 commit message 存储，
+不另建说明文件，也不在状态 JSON 中重复保存。`status` 和 `list` 应显示说明以便辨认 session。
+
+`finish` 必须使用非空、自定义的 message；空白说明或未修改的模板不能结束 session。
+若此前已经填写，直接 `relay finish` 使用最近保存的说明；否则没有 `-m` 时自动打开 Git 编辑器。
+编辑器优先预填已有说明；没有时使用 `commit.template`。遵循 Git configured editor 和环境变量的选择规则。
+空白、未修改的模板或编辑器失败都会取消本次操作并保留 session。三个命令的多个 `-m` 参数按独立段落拼接。
+完整的标题和正文成为最终唯一公开 commit 的 commit message，结束后可以通过普通 Git history 查看。
+
 假设：
 
 ```text

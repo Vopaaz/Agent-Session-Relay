@@ -69,6 +69,8 @@ class ShellGuardTests(unittest.TestCase):
             "relay finish",
             "relay abort",
             "relay suspend",
+            'relay message -m "Change the session description"',
+            "relay message",
             "relay kiro hook agent-stop",
             "python3 -m agent_session_relay finish",
             "bash <<'EOF'\ngit status\nEOF\n",

@@ -120,7 +120,7 @@ class WorkflowTests(RepositoryTest):
         self.assertIn("initial Git commit", self.run_relay("start", cwd=empty, ok=False).stderr)
 
     def test_finish_refuses_pending_and_new_files(self):
-        self.run_relay("start")
+        self.run_relay("start", "-m", "Add a reviewed project file")
         self.write("new.txt", "not staged")
         self.assertIn("Pending changes remain", self.run_relay("finish", ok=False).stderr)
         self.git("add", "new.txt")
@@ -132,7 +132,7 @@ class WorkflowTests(RepositoryTest):
         self.assert_clean()
 
     def test_empty_result_still_has_exactly_one_commit(self):
-        self.run_relay("start")
+        self.run_relay("start", "-m", "Verify the parser needs no changes")
         sid = self.state()["session"]
         self.run_relay("finish")
         self.assert_one_commit(
@@ -215,8 +215,14 @@ class WorkflowTests(RepositoryTest):
     def test_linked_worktrees_have_independent_active_sessions(self):
         linked = Path(self.temporary.name) / "linked"
         self.git("worktree", "add", "-b", "other", str(linked))
-        self.run_relay("start")
-        self.run_relay("start", cwd=linked)
+        self.run_relay("start", "-m", "Review the main worktree")
+        self.run_relay("start", "-m", "Review the linked worktree", cwd=linked)
+        self.run_relay("message", "-m", "Refine the linked worktree", cwd=linked)
+        self.assertEqual(self.state()["message"], "Review the main worktree")
+        self.assertEqual(
+            json.loads(self.run_relay("list", "--json", cwd=linked).stdout)[0]["message"],
+            "Refine the linked worktree",
+        )
         self.write("Token.kt", "main worktree proposal")
         (linked / "Token.kt").write_text("linked proposal")
         self.run_relay("suspend", cwd=linked)
@@ -275,7 +281,7 @@ class SuspendAbortTests(RepositoryTest):
         self.assertFalse((self.repo / "urgent.txt").exists())
 
     def test_multiple_suspended_sessions_and_immutable_base(self):
-        self.run_relay("start")
+        self.run_relay("start", "-m", "Update token definitions")
         first = self.state()["session"]
         self.write("Token.kt", "first proposal")
         self.run_relay("suspend")
@@ -343,7 +349,7 @@ class SuspendAbortTests(RepositoryTest):
         self.assert_clean()
 
     def test_result_and_recovery_branch_collisions_never_overwrite(self):
-        self.run_relay("start")
+        self.run_relay("start", "-m", "Preserve staged token changes")
         sid = self.state()["session"]
         for prefix in ("result", "aborted"):
             self.git("branch", f"relay/{prefix}/{sid}", self.base)
@@ -442,7 +448,7 @@ class RecoveryTests(RepositoryTest):
         self.assertFalse(relay.store.journal_path.exists())
 
     def test_crash_recovery_preserves_later_edits_and_restores_review_state(self):
-        self.run_relay("start")
+        self.run_relay("start", "-m", "Refine token handling")
         self.write("Token.kt", "staged\n")
         self.git("add", "Token.kt")
         self.write("Token.kt", "unstaged\n")
@@ -467,6 +473,7 @@ class RecoveryTests(RepositoryTest):
         branch = result.stdout.split("preserved at ")[1].strip().removesuffix(".")
         self.assertEqual(self.git("show", branch + ":late.txt"), "human edits after interruption\n")
         self.assertEqual(self.metadata(), before_meta)
+        self.assertEqual(self.state()["message"], "Refine token handling")
         self.assertEqual(self.read("Token.kt"), "unstaged\n")
         self.assertEqual(self.git("show", ":Token.kt"), "staged\n")
         self.assertFalse((self.repo / "late.txt").exists())
@@ -477,7 +484,7 @@ class RecoveryTests(RepositoryTest):
             self.assertIn("Another Relay command", self.run_relay("start", ok=False).stderr)
 
     def test_unavailable_git_identity_does_not_lose_finished_code(self):
-        self.run_relay("start")
+        self.run_relay("start", "-m", "Update reviewed token definitions")
         self.write("Token.kt", "staged\n")
         self.git("add", "Token.kt")
         self.git("config", "--unset", "user.name")

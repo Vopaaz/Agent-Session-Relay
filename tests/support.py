@@ -28,6 +28,7 @@ class RepositoryTest(unittest.TestCase):
                 "GIT_CONFIG_SYSTEM": os.devnull,
                 "GIT_TERMINAL_PROMPT": "0",
                 "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_EDITOR": "false",  # Never launch a developer's real editor in tests.
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
         )

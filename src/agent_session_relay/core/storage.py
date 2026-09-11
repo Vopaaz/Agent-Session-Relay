@@ -113,6 +113,11 @@ class Store:
         )
         git.pin(prefix + "staged", staged)
         namespace = f"refs/relay/sessions/{session_id}/"
+        refs = git.refs(namespace)
+        if message := refs.get(namespace + "message"):
+            # Finish/abort remove session refs before the journal commit point. JSON OIDs
+            # alone cannot keep the saved message alive through a crash followed by Git GC.
+            git.pin(prefix + "message", message)
         journal = {
             "state": copy.deepcopy(state),
             "head": git.head(),
@@ -120,7 +125,7 @@ class Store:
             "index": index_blob,
             "prefix": prefix,
             "namespace": namespace,
-            "refs": git.refs(namespace),
+            "refs": refs,
             "created_refs": {},
             "action": action,
         }

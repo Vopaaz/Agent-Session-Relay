@@ -112,13 +112,14 @@ See [integration details and a live smoke test](https://github.com/Vopaaz/Agent-
 
 | Command | Effect |
 | --- | --- |
-| `relay start` | Start from a completely clean, stable Git workspace |
-| `relay status` | Show lifecycle, reviewed checkpoint, staged approvals, and remaining proposals |
+| `relay start [-m "message"]` | Start from a completely clean, stable Git workspace, optionally describing the work |
+| `relay message [session] [-m "message"]` | Set the session message; omit `-m` to open the Git editor |
+| `relay status` | Show the session message, lifecycle, reviewed checkpoint, staged approvals, and remaining proposals |
 | `relay suspend` | Save full staging/workspace state and return to the origin branch |
 | `relay resume [session]` | Restore the only suspended session, or a selected ID/prefix |
-| `relay finish [-m "message"]` | Require full review; create and switch to a result branch with one public commit |
+| `relay finish [-m "message"]` | Require full review and a custom message; create and switch to a result branch with one public commit |
 | `relay abort` | Ask twice, preserve all current project code in a recovery branch, then remove the session |
-| `relay list` | List active and suspended sessions in this worktree |
+| `relay list` | List active and suspended sessions in this worktree with their message subjects |
 
 `status` and `list` also accept `--json`. `relay recover` is available for an interrupted operation.
 The usual single-session workflow never requires a session ID.
@@ -127,6 +128,20 @@ Starting rejects staged changes, unstaged changes, non-ignored untracked files, 
 conflicts, and unfinished merge/rebase/cherry-pick/revert/bisect operations. An initial commit is
 required. While active, use Git for staging and discarding; suspend before switching branches,
 committing, stashing, or rewriting history.
+
+## Session messages
+
+The session message becomes the single result commit's message and appears in `status` and `list`.
+
+```bash
+relay start       # Start immediately, without an editor
+relay message     # Write or revise the message in your Git editor
+relay finish      # After review, reuse the message; open the editor if none is saved
+```
+
+All three commands accept `-m "Description"`; repeat `-m` for separate paragraphs.
+The editor prefills any saved message and uses your Git editor and `commit.template` settings.
+An empty message, unchanged template, or cancelled edit leaves the session open.
 
 ## Agent commands
 
@@ -279,8 +294,11 @@ moving or hijacking the branch.
 ## Finish and integrate the result
 
 Finish refuses pending changes. You may stage the last accepted hunks and immediately finish;
-another agent handoff is not required. Even a session with no final code delta produces one result
-commit. Relay switches to `relay/result/<session>` and removes that session's internal refs/metadata.
+another agent handoff is not required. A custom session message must be saved, supplied with `-m`,
+or entered in the editor that opens when neither is available; there is no generated fallback.
+Even a session with no final code delta produces one result
+commit with that message. Relay switches to `relay/result/<session>` and removes that session's
+internal refs/metadata.
 
 Finish never merges, rebases, cherry-picks, or absorbs new mainline commits. Afterward, normal Git is
 available again. For example, with `main` as your current development branch:
@@ -344,11 +362,11 @@ Mutations are locked and journaled; ordinary failures roll back. If a process is
 review state. Do not edit files or run other Git operations during a lifecycle command.
 
 Kiro IDE 1.x / CLI 3.x is implemented. Codex, Claude Code, and other harnesses can add adapters using
-the same core; they are not shipped as supported integrations in this release. Legacy Kiro hook
-formats are not installed. The command guard covers ordinary Git invocations, wrappers, and common
-shell substitutions; it is not a security sandbox for arbitrary programs.
+the same core; they are not shipped as supported integrations in this release. The command guard
+covers ordinary Git invocations, wrappers, and common shell substitutions; it is not a security
+sandbox for arbitrary programs.
 
-Version 0.1 deliberately rejects sparse checkouts, submodules/embedded repositories, and
+Relay deliberately rejects sparse checkouts, submodules/embedded repositories, and
 assume-unchanged/skip-worktree flags instead of taking incomplete snapshots. Git ignore rules,
 attributes, and clean/smudge filters apply normally. See
 [security scope](https://github.com/Vopaaz/Agent-Session-Relay/blob/master/SECURITY.md).

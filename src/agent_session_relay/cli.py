@@ -8,6 +8,7 @@ from . import __version__
 from .core.errors import RelayError
 from .core.git import Git
 from .core.session import Relay
+from .editor import edit_message
 from .integrations.kiro.adapter import install, run_hook
 
 
@@ -17,7 +18,21 @@ def parser() -> argparse.ArgumentParser:
     )
     root.add_argument("--version", action="version", version=f"Agent-Session-Relay {__version__}")
     commands = root.add_subparsers(dest="command", required=True)
-    commands.add_parser("start", help="start from a clean Git workspace")
+    start = commands.add_parser("start", help="start from a clean Git workspace")
+    start.add_argument(
+        "-m", "--message", action="append",
+        help="describe the session; repeat for separate paragraphs (no editor at start)",
+    )
+    message = commands.add_parser("message", help="set or replace a session's final commit message")
+    message.add_argument(
+        "-m", "--message", action="append",
+        help="describe the work; repeat for paragraphs; omit to open the Git editor",
+    )
+    message.add_argument(
+        "session",
+        nargs="?",
+        help="session ID/prefix; defaults to the active or only suspended session",
+    )
     status = commands.add_parser("status", help="show session and review state")
     status.add_argument("--json", action="store_true", help="output structured state")
     commands.add_parser("suspend", help="save the full review state and return to normal Git")
@@ -26,7 +41,10 @@ def parser() -> argparse.ArgumentParser:
     finish = commands.add_parser(
         "finish", help="create one public result commit from reviewed code"
     )
-    finish.add_argument("-m", "--message", help="result commit message")
+    finish.add_argument(
+        "-m", "--message", action="append",
+        help="override the saved message; otherwise use it or open the Git editor",
+    )
     commands.add_parser(
         "abort", help="terminate after TWO confirmations, preserving a recovery branch"
     )
@@ -66,6 +84,10 @@ def describe_origin(origin: dict) -> str:
     )
 
 
+def message_subject(message: str | None) -> str:
+    return message.splitlines()[0] if message else "(not set; required before finish)"
+
+
 def confirm_abort(session_id: str) -> bool:
     print(
         "WARNING 1/2: Aborting ends this Relay session permanently; it cannot be resumed.\n"
@@ -103,12 +125,20 @@ def execute(args, paths: list[str]) -> int:
             print("Commit the project hook file before `relay start`, or install globally instead.")
         return 0
     relay = Relay(Git())
+    messages = getattr(args, "message", None)
+    message = "\n\n".join(messages) if messages is not None else None
     if args.command == "start":
-        session = relay.start()
+        session = relay.start(message)
         print(
             f"Relay session started: {session['id']}\nBase: {session['base_commit']}\n"
+            f"Message: {message_subject(session['message'])}\n"
             "Review with normal Git staging; send a prompt in Kiro to hand off to the agent."
         )
+    elif args.command == "message":
+        session = relay.set_message(
+            message, args.session, editor=lambda initial: edit_message(relay.git, initial)
+        )
+        print(f"Session message updated: {session['id']}\n{session['message']}")
     elif args.command in ("status", "agent"):
         if args.command == "agent" and args.agent_command == "diff":
             if args.null and not args.name_only:
@@ -123,12 +153,17 @@ def execute(args, paths: list[str]) -> int:
             elif not status["active"]:
                 print(f"Relay is {status['lifecycle']}.")
                 if status["suspended_sessions"]:
-                    print("Suspended: " + ", ".join(status["suspended_sessions"]))
+                    for session in relay.list_sessions():
+                        print(
+                            f"Suspended: {session['id']}  "
+                            f"{message_subject(session['message'])}"
+                        )
                     print("Use `relay resume` to continue.")
             else:
                 print(
                     f"Session: {status['session']} "
                     f"({status['lifecycle']}, {status['phase']} turn)\n"
+                    f"Message: {message_subject(status['message'])}\n"
                     f"Base: {status['base_commit']}\nReviewed: {status['reviewed_checkpoint']}\n"
                     f"Staged approvals: {'yes' if status['staged_approvals'] else 'none'}\n"
                     "Unstaged / untracked proposals: "
@@ -137,8 +172,7 @@ def execute(args, paths: list[str]) -> int:
                     f"{'available' if status['provenance']['available'] else 'none yet'}"
                 )
     elif args.command == "list":
-        relay.store.assert_ready()
-        sessions = list(relay.store.load()["sessions"].values())
+        sessions = relay.list_sessions()
         if args.json:
             print(json.dumps(sessions, indent=2))
         elif not sessions:
@@ -147,7 +181,7 @@ def execute(args, paths: list[str]) -> int:
             for session in sorted(sessions, key=lambda s: s["id"]):
                 print(
                     f"{session['id']}  {session['state']}  base={session['base_commit'][:12]}  "
-                    f"turns={session['turn']}"
+                    f"turns={session['turn']}  {message_subject(session['message'])}"
                 )
     elif args.command == "suspend":
         session, origin = relay.suspend()
@@ -159,7 +193,7 @@ def execute(args, paths: list[str]) -> int:
         session = relay.resume(args.session)
         print(f"Relay session resumed: {session['id']}\nStaged and unstaged review state restored.")
     elif args.command == "finish":
-        branch = relay.finish(args.message)
+        branch = relay.finish(message, editor=lambda initial: edit_message(relay.git, initial))
         print(
             f"Relay session finished. Switched to {branch}.\n"
             "One result commit; its only parent is the immutable session base.\n"

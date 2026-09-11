@@ -46,7 +46,8 @@ provenance includes discards, reversions, additions, and deletions during the hu
 cannot distinguish who typed the same bytes; turn boundaries provide the provenance assumption.
 
 Agent status reports both the complete delta since R (`pending_changes`) and unsealed approvals
-(`staged_approvals`). `unstaged_changes` compares I to W and is the condition that blocks finish.
+(`staged_approvals`). `unstaged_changes` compares I to W and blocks finish when true; finish also
+requires a custom session message.
 The reviewed/human views stay fixed while the agent works; only pending is live.
 
 Snapshot and diff operations use a temporary index. Snapshotting copies the real index, expands any
@@ -68,6 +69,7 @@ Each worktree has its own state and lock:
 refs/relay/sessions/<id>/
   base                      Immutable B
   reviewed                  Current R; parent chain retains earlier reviewed checkpoints
+  message                   Optional commit whose native message describes the session
   turn-000001-pre            P1 (and subsequent turn snapshots)
   turn-000001-post           Q1
   suspend-workspace         Full suspended W
@@ -80,6 +82,7 @@ refs/relay/transactions/<id>/
   index                     Before-transition raw index blob
   staged                    GC protection for staged-only object contents
   intent-to-add             GC protection for the empty blob
+  message                   Optional saved session message, protected through cleanup/recovery
 ```
 
 Snapshot commits have B as their parent; checkpoint commits have the previous checkpoint as parent.
@@ -89,6 +92,31 @@ active session. Sessions in another worktree are managed from that worktree.
 
 ## Suspend, resume, finish, abort
 
+Session descriptions are native commit messages stored at the optional `message` ref. Its commit
+has B's tree and B as its only parent; it never moves HEAD or changes review baselines. `start -m`
+creates it inside the start transaction. `relay message [session] [-m ...]` creates a replacement commit
+and atomically updates just that ref under the worktree lock, without writing message text into
+state JSON. No workspace transaction is needed for this single-ref mutation. Missing refs mean no
+custom message has been set. `status` and `list` read the current message from Git; ordinary session
+cleanup and rollback include its ref. Workspace transactions also pin the previous message until
+their commit point, so a crash during finish/abort
+cleanup followed by Git GC cannot remove the message needed for recovery.
+
+Interactive editing lives in `editor.py`; the CLI supplies an editor callback to the core. Start
+never edits interactively. Message edits prefill the existing message, or use `commit.template`
+when no message exists. Finish calls the editor only if neither an explicit nor saved message is
+available. `git var GIT_EDITOR` resolves the user's editor command, executed with inherited terminal
+streams and a separately passed temporary `COMMIT_EDITMSG` path. The buffer is removed afterward;
+the normal Git commit buffer is untouched. Git's stripspace plumbing handles edited-message cleanup
+and comment prefixes, with `commit.cleanup` modes and unchanged-template rejection.
+
+The editor runs without holding the Relay lock, a workspace transaction, or a Git index lock;
+status and lifecycle hooks remain available. Saving rechecks the selected session and its previous
+message under the lock so concurrent message changes or session removal are not overwritten.
+Finish checks pending changes and public Git identity before invoking the editor, then revalidates
+the session record, message, HEAD, and complete index/workspace after it returns, before starting its
+workspace transaction. A changed session or a cancelled editor does not create a result commit.
+
 Suspend pins W, I's raw bytes, I's tree, and provenance before leaving. The expanded index preserves
 staged/unstaged distinctions and intent-to-add without depending on a sharedindex file's lifetime.
 To leave the workspace, Relay loads W into the real index, refreshes its stat cache, then uses Git's
@@ -96,9 +124,14 @@ two-tree update to restore the origin. This removes only captured project additi
 `git clean`. Ignored path collisions are rejected before checkout. Resume reverses the operation and
 restores the saved index separately from W.
 
-Finish requires W = I. It creates `commit-tree(I, parent=B)`, creates a result branch using an
-atomic create-only ref update, switches to it, and removes the session. It never uses a squash merge
-that might accidentally pull internal parents or another branch into the result.
+Finish requires W = I and a non-empty custom message. An explicit `finish -m` overrides the saved
+session message.
+Without an explicit or saved message, the human CLI opens the configured Git editor and requires
+a valid custom message; an empty message, unchanged template, or editor failure cancels finish.
+The full subject/body becomes the public commit message. Finish creates `commit-tree(I, parent=B)`,
+creates a result branch using an atomic create-only ref update, switches to it, and removes the
+session. It never uses a squash merge that might accidentally pull internal parents or another
+branch into the result.
 
 Abort's two confirmations live in the human CLI. The core rechecks the confirmed session identity
 after acquiring the lock. It creates `commit-tree(W, parent=B)` and a normal recovery branch before

@@ -108,13 +108,14 @@ context。** 普通 Kiro 对话中的 Git 使用不受影响。
 
 | 命令 | 效果 |
 | --- | --- |
-| `relay start` | 从完全 clean、稳定的 Git 工作区开始 |
-| `relay status` | 查看生命周期、reviewed checkpoint、staged approvals 和剩余 proposals |
+| `relay start [-m "message"]` | 从完全 clean、稳定的 Git 工作区开始，可选填写本次工作的说明 |
+| `relay message [session] [-m "message"]` | 设置 session 说明；省略 `-m` 则打开 Git 编辑器 |
+| `relay status` | 查看 session 说明、生命周期、reviewed checkpoint、staged approvals 和剩余 proposals |
 | `relay suspend` | 保存完整 staging/workspace 状态，返回原分支 |
 | `relay resume [session]` | 恢复唯一的 suspended session，或指定 ID/前缀 |
-| `relay finish [-m "message"]` | 要求全部 review 完成；创建并切换到只有一个公开 commit 的结果分支 |
+| `relay finish [-m "message"]` | 要求全部 review 完成和有效说明；尚无说明时打开编辑器，再创建唯一结果 commit |
 | `relay abort` | 两次确认后保存 recovery branch，再终止并清理 session |
-| `relay list` | 列出当前 worktree 的 active / suspended sessions |
+| `relay list` | 列出当前 worktree 的 active / suspended sessions 及各自说明的首行 |
 
 `status` 和 `list` 还支持 `--json`。操作意外中断时可使用额外的 `relay recover`。
 普通单 session 流程不需要管理 session ID。
@@ -122,6 +123,20 @@ context。** 普通 Kiro 对话中的 Git 使用不受影响。
 Start 会拒绝 staged changes、unstaged changes、未忽略的 untracked files、未解决的 index conflicts，
 以及尚未完成的 merge/rebase/cherry-pick/revert/bisect 等操作。仓库需要已有初始 commit。
 Active 期间，用户使用 Git staging/discard；切分支、commit、stash 或修改 history 前请先 suspend。
+
+## Session 说明与 commit message
+
+Session 说明会成为最终唯一 commit 的 message，也会显示在 `status` 和 `list` 中。
+
+```bash
+relay start       # 直接开始，不打开编辑器
+relay message     # 用 Git 编辑器填写或修改说明
+relay finish      # 审阅完成后使用已有说明；尚未填写则打开编辑器
+```
+
+三个命令都可用 `-m "说明"` 直接设置；多个 `-m` 按段落拼接。
+编辑器预填已有说明，并沿用 Git 的编辑器和 `commit.template` 配置。
+空白说明、未修改的模板或取消编辑，都不会结束 session。
 
 ## Agent-facing 命令
 
@@ -270,7 +285,9 @@ Suspend / abort 返回原分支的当前 tip。如果原分支被删除或已在
 ## Finish 与结果集成
 
 存在 pending changes 时不能 finish。最后一批 hunks review 通过后，可直接 stage 并 finish，
-不必额外发送一次 prompt。即使最终 tree 与 base 相同，也创建一个结果 commit。
+不必额外发送一次 prompt。说明可以预先保存、通过 `-m` 当场提供，或在两者都没有时由自动打开的
+编辑器填写，不再生成默认说明。
+即使最终 tree 与 base 相同，也创建一个使用该 message 的结果 commit。
 Relay 切换到 `relay/result/<session>`，清理该 session 的内部 refs 与 metadata。
 
 Finish 不进行 merge、rebase、cherry-pick，也不吸收 session 期间新增的 mainline commits。
@@ -333,10 +350,10 @@ tests/                      真实 Git 工作流与 adapter 测试
 执行生命周期命令期间，请勿同时编辑文件或运行其他 Git 操作。
 
 本版本实现 Kiro IDE 1.x / CLI 3.x。Codex、Claude Code 等可通过相同 Core 扩展 adapter，目前未随
-本版本提供正式接入。安装器不生成 Kiro 旧版本 hook 格式。Git guard 覆盖普通 Git 调用、常见 wrappers
+本版本提供正式接入。Git guard 覆盖普通 Git 调用、常见 wrappers
 与 shell substitutions，不是针对任意程序的安全沙箱。
 
-0.1 版本明确拒绝 sparse checkout、submodules/embedded repositories，以及
+Relay 明确拒绝 sparse checkout、submodules/embedded repositories，以及
 assume-unchanged/skip-worktree 标志，避免产生不完整快照。Git ignore、attributes 和 clean/smudge
 filters 按正常 Git 规则生效。详见 [安全说明](SECURITY.md)。
 

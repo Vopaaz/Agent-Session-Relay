@@ -243,8 +243,20 @@ class Git:
                 "GIT_COMMITTER_EMAIL": "relay@localhost",
             }
         return self.text(
-            "commit-tree", tree, "-p", parent, data=(message.rstrip() + "\n").encode(), env=env
+            "-c",
+            "i18n.commitEncoding=UTF-8",
+            "commit-tree",
+            tree,
+            "-p",
+            parent,
+            data=(message.rstrip() + "\n").encode(),
+            env=env,
         )
+
+    def commit_message(self, commit: str) -> str:
+        # Relay writes UTF-8 messages; read the stored bytes without user log-format settings.
+        contents = self.run("cat-file", "commit", commit).stdout
+        return contents.split(b"\n\n", 1)[1].decode("utf-8").rstrip("\n")
 
     def pin(self, ref: str, oid: str, *, create: bool = False) -> None:
         args = (ref, oid, "") if create else (ref, oid)
