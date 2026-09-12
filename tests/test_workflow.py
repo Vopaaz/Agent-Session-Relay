@@ -312,7 +312,7 @@ class SuspendAbortTests(RepositoryTest):
         self.run_relay("resume", ok=False)
         self.assertEqual(self.read("Token.kt"), "urgent unfinished work")
 
-    def test_abort_double_confirmation_and_complete_recovery(self):
+    def test_abort_single_confirmation_and_complete_recovery(self):
         self.run_relay("start")
         sid = self.state()["session"]
         self.write("Token.kt", "reviewed version\n")
@@ -327,16 +327,16 @@ class SuspendAbortTests(RepositoryTest):
         self.write("binary.dat", b"\0\xffsaved")
         (self.repo / "README.md").unlink()
         before = self.git("status", "--porcelain", "-z")
-        for answer in ("", "no\n", "abort\n", "abort\nno\n"):
+        for answer in ("", "\n", "no\n", "preserve and abort\n"):
             with self.subTest(answer=answer):
                 self.run_relay("abort", input=answer, ok=False)
                 self.assertTrue(self.state()["active"])
                 self.assertEqual(self.git("status", "--porcelain", "-z"), before)
                 self.assertEqual(self.git("branch", "--list", "relay/aborted/*"), "")
-        result = self.run_relay("abort", input="abort\npreserve and abort\n")
+        result = self.run_relay("abort", input="abort\n")
         branch = f"relay/aborted/{sid}"
-        self.assertIn("WARNING 1/2", result.stdout)
-        self.assertIn("WARNING 2/2", result.stdout)
+        self.assertIn("WARNING:", result.stdout)
+        self.assertEqual(result.stdout.count("Type '"), 1)
         self.assertIn(branch, result.stdout)
         self.assert_one_commit(branch)
         self.assertEqual(self.git("show", branch + ":Token.kt"), "reviewed version\n")
@@ -356,7 +356,7 @@ class SuspendAbortTests(RepositoryTest):
         self.write("Token.kt", "keep staged code")
         self.git("add", "Token.kt")
         self.run_relay("finish", ok=False)
-        self.run_relay("abort", input="abort\npreserve and abort\n", ok=False)
+        self.run_relay("abort", input="abort\n", ok=False)
         self.assertTrue(self.state()["active"])
         self.assertEqual(self.read("Token.kt"), "keep staged code")
         self.assertEqual(self.git("show", ":Token.kt"), "keep staged code")
@@ -386,7 +386,7 @@ class SuspendAbortTests(RepositoryTest):
         sid = self.state()["session"]
         self.git("rm", "--cached", "kept.ignored")
         self.write("kept.ignored", "recreated code must survive")
-        self.run_relay("abort", input="abort\npreserve and abort\n")
+        self.run_relay("abort", input="abort\n")
         self.assertEqual(
             self.git("show", f"relay/aborted/{sid}:kept.ignored"), "recreated code must survive"
         )
@@ -415,7 +415,7 @@ class RecoveryTests(RepositoryTest):
         recovery = self.git("rev-parse", branch).strip()
         self.assertEqual(self.git("show", branch + ":Token.kt"), "recover this code")
         self.assertTrue(self.state()["active"])
-        self.run_relay("abort", input="abort\npreserve and abort\n")
+        self.run_relay("abort", input="abort\n")
         self.assertEqual(self.git("rev-parse", branch).strip(), recovery)
         self.assert_clean()
 
@@ -494,4 +494,4 @@ class RecoveryTests(RepositoryTest):
         self.assertTrue(self.state()["active"])
         self.assertEqual(self.git("show", ":Token.kt"), "staged\n")
         # Abort recovery uses an internal fallback identity.
-        self.run_relay("abort", input="abort\npreserve and abort\n")
+        self.run_relay("abort", input="abort\n")

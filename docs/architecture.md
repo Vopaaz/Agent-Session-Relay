@@ -133,7 +133,7 @@ creates a result branch using an atomic create-only ref update, switches to it, 
 session. It never uses a squash merge that might accidentally pull internal parents or another
 branch into the result.
 
-Abort's two confirmations live in the human CLI. The core rechecks the confirmed session identity
+Abort's single confirmation lives in the human CLI. The core rechecks the confirmed session identity
 after acquiring the lock. It creates `commit-tree(W, parent=B)` and a normal recovery branch before
 returning to the origin and removing the session. Recovery includes non-ignored untracked code; it
 does not preserve the staging distinction. A suspended session must first be resumed.

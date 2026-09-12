@@ -226,7 +226,7 @@ class SessionMessageTests(RepositoryTest):
         self.run_relay("start", "-m", "Inspect parser configuration")
         self.run_relay("message", "-m", "Clarify parser configuration")
         self.assertEqual(self.state()["message"], "Clarify parser configuration")
-        self.run_relay("abort", input="abort\npreserve and abort\n")
+        self.run_relay("abort", input="abort\n")
         self.assertEqual(self.git("for-each-ref", "refs/relay/"), "")
 
     def test_finish_crash_and_gc_do_not_lose_the_saved_message(self):

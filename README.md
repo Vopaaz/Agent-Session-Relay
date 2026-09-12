@@ -118,7 +118,7 @@ See [integration details and a live smoke test](https://github.com/Vopaaz/Agent-
 | `relay suspend` | Save full staging/workspace state and return to the origin branch |
 | `relay resume [session]` | Restore the only suspended session, or a selected ID/prefix |
 | `relay finish [-m "message"]` | Require full review and a custom message; create and switch to a result branch with one public commit |
-| `relay abort` | Ask twice, preserve all current project code in a recovery branch, then remove the session |
+| `relay abort` | Ask once, preserve all current project code in a recovery branch, then remove the session |
 | `relay list` | List active and suspended sessions in this worktree with their message subjects |
 
 `status` and `list` also accept `--json`. `relay recover` is available for an interrupted operation.
@@ -321,8 +321,8 @@ These are your explicit Git operations; Relay does not run them.
 relay abort
 ```
 
-The command issues **two separate warnings and confirmations**. You must first type `abort`, then
-`preserve and abort`. EOF, any other response, or declining either prompt cancels without cleanup.
+The command displays a warning and asks for **one confirmation**: type `abort` to proceed.
+EOF or any other response cancels without cleanup.
 There is no `--yes` shortcut. A suspended session must be resumed before aborting it.
 
 Before deleting anything needed to resume, Relay creates `relay/aborted/<session>` with one commit

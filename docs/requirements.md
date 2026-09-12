@@ -838,7 +838,7 @@ Suspend 期间其他 Git history 变化不会改变 immutable `base_commit`。
 
 这是一个高影响操作，因为它会删除 Relay 用于继续 session 的 checkpoints、snapshots 和 provenance。
 
-因此 `relay abort` 必须在实际执行前向用户进行两次明确警告/确认。
+因此 `relay abort` 必须在实际执行前向用户进行一次明确警告/确认。
 
 警告应清楚表达：
 
@@ -1090,7 +1090,7 @@ README 至少包括：
 8. Agent 如何使用 `--name-only` → targeted diff 的例子；
 9. suspend/resume；
 10. finish/result branch；
-11. abort recovery branch 和 double-confirm behavior；
+11. abort recovery branch 和 single-confirm behavior；
 12. 如何将 result rebase/merge 到当前开发 branch；
 13. architecture overview；
 14. supported agent harnesses。

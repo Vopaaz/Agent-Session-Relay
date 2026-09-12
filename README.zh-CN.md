@@ -114,7 +114,7 @@ context。** 普通 Kiro 对话中的 Git 使用不受影响。
 | `relay suspend` | 保存完整 staging/workspace 状态，返回原分支 |
 | `relay resume [session]` | 恢复唯一的 suspended session，或指定 ID/前缀 |
 | `relay finish [-m "message"]` | 要求全部 review 完成和有效说明；尚无说明时打开编辑器，再创建唯一结果 commit |
-| `relay abort` | 两次确认后保存 recovery branch，再终止并清理 session |
+| `relay abort` | 一次确认后保存 recovery branch，再终止并清理 session |
 | `relay list` | 列出当前 worktree 的 active / suspended sessions 及各自说明的首行 |
 
 `status` 和 `list` 还支持 `--json`。操作意外中断时可使用额外的 `relay recover`。
@@ -311,8 +311,8 @@ git merge --ff-only relay/result/<session>
 relay abort
 ```
 
-命令会给出 **两次独立警告与确认**：第一次输入 `abort`，第二次输入 `preserve and abort`。
-任意一次拒绝、输入其他内容或 EOF，都会取消操作而不清理 session。没有 `--yes` 跳过入口。
+命令会显示警告并要求 **一次确认**：输入 `abort` 即可继续。
+输入其他内容或 EOF，都会取消操作而不清理 session。没有 `--yes` 跳过入口。
 要终止 suspended session，请先恢复该 session。
 
 实际清理之前，Relay 创建 `relay/aborted/<session>`，其中一个 commit 的 parent 是 immutable base，

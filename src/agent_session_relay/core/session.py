@@ -365,7 +365,7 @@ class Relay:
             message = self.validate_message(editor(None))
 
     def abort(self, expected_id: str) -> tuple[str, dict]:
-        """The CLI collects TWO explicit confirmations before calling this mutation."""
+        """The CLI collects one explicit confirmation before calling this mutation."""
         with self.store.lock():
             self.store.assert_ready()
             state = self.store.load()

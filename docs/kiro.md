@@ -71,7 +71,7 @@ with real Git, but do not launch or impersonate a real Kiro agent service.
 6. After Agent Stop, suspend. Verify normal Git calls work again. Resume and verify staged/unstaged
    state returns unchanged.
 7. Review and stage everything, then finish. Check the result's only parent is the start commit.
-8. In a separate disposable session, test both abort cancellations and the double-confirmed recovery
+8. In a separate disposable session, test abort cancellation and the single-confirmed recovery
    branch, including a newly created untracked file.
 
 If no protocol appears, check that the hooks are enabled and loaded, Kiro can find `relay`, and the

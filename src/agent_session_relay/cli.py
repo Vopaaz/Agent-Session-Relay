@@ -46,7 +46,7 @@ def parser() -> argparse.ArgumentParser:
         help="override the saved message; otherwise use it or open the Git editor",
     )
     commands.add_parser(
-        "abort", help="terminate after TWO confirmations, preserving a recovery branch"
+        "abort", help="terminate after one confirmation, preserving a recovery branch"
     )
     listing = commands.add_parser(
         "list", help="list active and suspended sessions in this worktree"
@@ -90,23 +90,15 @@ def message_subject(message: str | None) -> str:
 
 def confirm_abort(session_id: str) -> bool:
     print(
-        "WARNING 1/2: Aborting ends this Relay session permanently; it cannot be resumed.\n"
+        "WARNING: Aborting ends this Relay session permanently; it cannot be resumed.\n"
         "Relay will delete its intermediate checkpoints, snapshots, and review/provenance state.\n"
         "Your current code will be preserved first in a recovery branch, including staged,\n"
-        "unstaged, and non-ignored untracked project files."
+        "unstaged, and non-ignored untracked project files.\n"
+        f"Recovery branch: relay/aborted/{session_id}\n"
+        "The recovery commit preserves code; the staging distinction will be lost."
     )
     try:
-        if input("Type 'abort' to acknowledge this warning: ").strip() != "abort":
-            return False
-        print(
-            "\nWARNING 2/2: This removes the session's ability to resume and its intermediate\n"
-            "review history. Current workspace code will be saved in a single recovery commit\n"
-            f"at relay/aborted/{session_id} before cleanup; the staging distinction will be lost."
-        )
-        return (
-            input("Type 'preserve and abort' to confirm the cleanup: ").strip()
-            == "preserve and abort"
-        )
+        return input("Type 'abort' to confirm the cleanup: ").strip() == "abort"
     except EOFError:
         return False
 
