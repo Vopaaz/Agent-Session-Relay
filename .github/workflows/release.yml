@@ -25,4 +25,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME"
           dist/pypi/* dist/relay.pyz dist/relay.pyz.sha256
           --title "Agent-Session-Relay $GITHUB_REF_NAME"
-          --generate-notes --draft
+          --notes-file "docs/releases/$GITHUB_REF_NAME.md" --draft

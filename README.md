@@ -25,7 +25,7 @@ The CLI is `relay`. Relay provides session state and semantic diffs; it does not
 Reviewed code is **soft approval**, never a lock. If the agent renames or refactors accepted code,
 the new delta returns to pending review. The same freedom applies to human-authored edits.
 
-At each prompt handoff, Relay incorporates staged approvals into an internal reviewed checkpoint,
+At each normal prompt handoff, Relay incorporates staged approvals into an internal reviewed checkpoint,
 leaves the staging area clean relative to it, and preserves every remaining proposal. On Agent Stop,
 Relay captures the agent's output and presents it as unstaged changes or untracked new files.
 
@@ -91,13 +91,13 @@ Three hooks implement the workflow:
 
 | Event | Relay behavior |
 | --- | --- |
-| Prompt Submit (`UserPromptSubmit`) | Seal staged approvals, snapshot pre-agent code, record review/human provenance, inject the Relay protocol |
-| Agent Stop (`Stop`) | Snapshot the completed agent turn and leave its changes pending |
-| Pre Tool Use (`PreToolUse`) | Block direct Git commands and guide the agent to `relay agent` |
+| Prompt Submit (`UserPromptSubmit`) | Snapshot the turn and inject its protocol; normal turns also seal approvals and list human-changed files |
+| Agent Stop (`Stop`) | Leave normal output pending; save unexpected btw writes before restoring the original review state |
+| Pre Tool Use (`PreToolUse`) | Block direct Git commands; during btw, also block known write tools and obvious shell writes |
 
-On every active handoff, the injected protocol explains the review model, permission to change
-previously accepted or human-edited code, and all inspection commands. No separate Agent Skill is
-needed. File lists and patches are queried on demand, not automatically stuffed into each prompt.
+Every active turn receives a compact, self-contained protocol for its mode. Normal turns with human
+changes automatically include their complete file list, covering edits and discards; full patches
+remain on demand. Btw turns omit that list but retain semantic queries. No separate Agent Skill is needed.
 
 **With no active session, including while suspended, every hook succeeds silently without changing
 Git or injecting context.** Normal Kiro conversations retain their ordinary Git behavior.
@@ -115,6 +115,7 @@ See [integration details and a live smoke test](https://github.com/Vopaaz/Agent-
 | `relay start [-m "message"]` | Start from a completely clean, stable Git workspace, optionally describing the work |
 | `relay message [session] [-m "message"]` | Set the session message; omit `-m` to open the Git editor |
 | `relay status` | Show the session message, lifecycle, reviewed checkpoint, staged approvals, and remaining proposals |
+| `relay btw [--cancel]` | Make the next prompt a read-only aside; `--cancel` cancels the unconsumed selection |
 | `relay suspend` | Save full staging/workspace state and return to the origin branch |
 | `relay resume [session]` | Restore the only suspended session, or a selected ID/prefix |
 | `relay finish [-m "message"]` | Require full review and a custom message; create and switch to a result branch with one public commit |
@@ -128,6 +129,41 @@ Starting rejects staged changes, unstaged changes, non-ignored untracked files, 
 conflicts, and unfinished merge/rebase/cherry-pick/revert/bisect operations. An initial commit is
 required. While active, use Git for staging and discarding; suspend before switching branches,
 committing, stashing, or rewriting history.
+
+## Ask a side question with btw
+
+While partway through review, run `relay btw` and send your question in Kiro. It selects **only the
+next turn**; `relay status` shows the current and next modes. Run `relay btw --cancel` before sending
+the prompt to cancel. Each later prompt is normal unless you select btw again.
+
+Btw leaves HEAD, staged approvals, and manual edits in place. It does not seal approvals or advance
+the main human-diff baseline. `relay agent diff human` remains available, fixed at btw entry, and
+querying it does not consume anything. The next normal turn receives the accumulated human changes,
+including changes made before and after any intervening btw turns. `diff reviewed` is empty in btw.
+As in normal turns, wait for Agent Stop before editing, staging, or discarding.
+
+The agent is instructed to answer without writing and to request a normal turn when implementation
+is needed. The tool guard catches known file writers and obvious shell writes on a best-effort basis.
+If writes get through, Stop saves the output, then restores the entry workspace and complete index.
+Unchanged files are not rewritten. This covers captured project files, not unrelated ignored files
+or effects outside the repository; it is not an execution sandbox.
+
+`relay status` and the Stop notice identify saved btw turns. For example, for turn 2:
+
+```bash
+relay agent diff btw --turn 2                 # Saved workspace delta
+relay agent diff btw --turn 2 --staged        # Saved index delta, including staged-only content
+relay agent restore-btw 2                     # Apply the workspace delta during a NORMAL agent turn
+```
+
+Retrieval is allowed only after a normal handoff, so retrieved changes keep agent provenance and
+remain unstaged. Add `--staged` to retrieve the saved index delta as unstaged workspace changes instead.
+If a patch conflicts with current work, retrieval leaves it untouched; the agent can inspect and
+adapt the saved patch. Saved btw records remain in this session and are deleted by finish/abort.
+Suspend/resume preserves them and any pending btw selection. State formats are version-specific;
+finish or abort all sessions with the version that started them before upgrading. For v0.2.x to
+v0.3.0, also remove the old empty metadata file as described in the
+[upgrade instructions](docs/releases/v0.3.0.md#upgrading-from-v02x).
 
 ## Session messages
 
@@ -148,7 +184,7 @@ An empty message, unchanged template, or cancelled edit leaves the session open.
 ```bash
 relay agent status                         # JSON summary; no complete patches
 relay agent diff reviewed                  # Exact newly accepted hunks at the latest handoff
-relay agent diff human                     # Previous Agent Stop → latest pre-agent snapshot
+relay agent diff human                     # Previous normal Agent Stop → latest pre-agent snapshot
 relay agent diff pending                   # Reviewed checkpoint → live workspace
 ```
 

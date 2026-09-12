@@ -42,11 +42,11 @@ class Store:
 
     def load(self) -> dict:
         if not self.path.exists():
-            return {"schema": 1, "active": None, "sessions": {}}
+            return {"schema": 2, "active": None, "sessions": {}}
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
             if (
-                value["schema"] != 1
+                value["schema"] != 2
                 or not isinstance(value["sessions"], dict)
                 or (value["active"] is not None and value["active"] not in value["sessions"])
             ):
@@ -165,7 +165,7 @@ class Store:
 
     def rollback(self, journal: dict) -> None:
         git = self.git
-        current = git.workspace_tree()
+        current = git.workspace_tree(previous=journal["workspace"])
         target = git.tree(journal["workspace"])
         if current != target:
             git.materialize(current, target)
@@ -201,7 +201,7 @@ class Store:
             raise RelayError(f"Recovery journal is invalid: {self.journal_path}") from exc
         self.git.assert_stable()
         # Explicit recovery may run hours later. Preserve new human edits before rolling back.
-        workspace = self.git.workspace_tree()
+        workspace = self.git.workspace_tree(previous=journal["workspace"])
         branch = "relay/recovered/" + uuid.uuid4().hex[:12]
         parent = journal["head"]["commit"]
         commit = self.git.commit(workspace, parent, "Relay interrupted-operation recovery")

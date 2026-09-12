@@ -47,8 +47,9 @@ project. The tool guard is a workflow aid, not a security boundary against arbit
 
 ## Releases
 
-The package version has one source of truth: `src/agent_session_relay/__init__.py`. Update it, then
-prepare and validate both PyPI distributions without uploading anything:
+The package version has one source of truth: `src/agent_session_relay/__init__.py`. Update it and
+write `docs/releases/v<version>.md` with the changes and any upgrade steps. Then prepare and
+validate both PyPI distributions without uploading anything:
 
 ```bash
 python3 -m venv .venv
@@ -70,4 +71,5 @@ python -m twine upload dist/pypi/*
 For a rehearsal, use `python -m twine upload --repository testpypi dist/pypi/*` instead. A
 `v<version>` tag triggers a workflow that checks the tag against the package version and creates a
 **draft** GitHub release containing the validated wheel, source distribution, zipapp, and checksum.
-It never uploads to PyPI; a maintainer must run the Twine command separately and publish the draft.
+The draft uses `docs/releases/v<version>.md` as its release notes. It never uploads to PyPI; a
+maintainer must run the Twine command separately and publish the draft.

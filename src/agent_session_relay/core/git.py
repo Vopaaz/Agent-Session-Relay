@@ -192,7 +192,7 @@ class Git:
         with self.temporary_index() as (path, _):
             return path.read_bytes()
 
-    def workspace_tree(self, baseline: str | None = None) -> str:
+    def workspace_tree(self, baseline: str | None = None, *, previous: str | None = None) -> str:
         """Snapshot tracked + non-ignored untracked files without changing the staging UI."""
         baseline = baseline or self.resolve("HEAD")
         with self.temporary_index() as (_, env):
@@ -202,7 +202,10 @@ class Git:
                 if entry
             }
             # A staged deletion can leave a now-ignored file on disk. It is still session code.
-            for entry in self.run("ls-tree", "-r", "-z", baseline).stdout.split(b"\0"):
+            entries = self.run("ls-tree", "-r", "-z", baseline).stdout
+            if previous and previous != baseline:
+                entries += self.run("ls-tree", "-r", "-z", previous).stdout
+            for entry in entries.split(b"\0"):
                 if not entry:
                     continue
                 meta, name = entry.split(b"\t", 1)
@@ -225,6 +228,7 @@ class Git:
                         os.fsdecode(name),
                         env=env,
                     )
+                    indexed.add(name)
             self.run("add", "--all", "--", ".", env=env)
             tree = self.text("write-tree", env=env)
             self.assert_no_gitlinks(tree)

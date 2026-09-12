@@ -43,7 +43,10 @@ class WorkflowTests(RepositoryTest):
         self.run_relay("agent", "status")
         self.names("pending")
         self.assertEqual((self.repo / ".git/index").read_bytes(), before_index)
-        self.assertEqual(self.hook("prompt-submit").stdout, injection)
+        injection = self.hook("prompt-submit").stdout
+        self.assertIn('Human changes (repository-relative paths, JSON):', injection)
+        self.assertIn('["Parser.kt", "README.md"]', injection)
+        self.assertNotIn("human direction", injection)
         self.assertEqual(self.git("diff", "--cached"), "")
         self.assertEqual(self.names("reviewed"), {"Parser.kt", "Token.kt", "new.bin"})
         # A discard is a workspace change made during the human interval too.
@@ -59,7 +62,7 @@ class WorkflowTests(RepositoryTest):
         self.assertNotIn("+accepted parser hunk", pending)
         self.assertIn("+human direction", pending)
         # Duplicate hook execution must not erase the accepted-hunk/human provenance.
-        self.hook("prompt-submit")
+        self.assertEqual(self.hook("prompt-submit").stdout, injection)
         self.assertEqual(self.state()["turn"], 2)
         self.assertEqual(self.run_relay("agent", "diff", "human", "--", "Parser.kt").stdout, human)
         self.write("Token.kt", "ParsedToken refactored again\n")

@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 import shlex
 
+from . import readonly
+
 GUIDANCE = (
     "Agent-Session-Relay is active. Direct Git commands (including inspection) and "
     "human-only Relay lifecycle commands are blocked. Use `relay agent status`, "
@@ -274,11 +276,13 @@ def _statement_violation(words: list[str], variables: dict, depth: int) -> bool:
     return False
 
 
-def violation(payload: dict) -> str | None:
+def violation(payload: dict, *, btw: bool = False) -> str | None:
     tool = payload.get("tool_name", payload.get("toolName", ""))
     if not isinstance(tool, str) or not tool:
         return "Missing tool context; Relay cannot validate this tool invocation. " + GUIDANCE
     lower = tool.lower()
+    if btw and readonly.write_tool(lower):
+        return readonly.GUIDANCE
     if (
         lower.startswith(("@git/", "mcp__git__", "git_"))
         or lower == "git"
@@ -301,4 +305,8 @@ def violation(payload: dict) -> str | None:
                 commands.extend(value)
     if not commands:
         return "Missing shell command payload. " + GUIDANCE
-    return GUIDANCE if any(shell_violation(command) for command in commands) else None
+    if any(shell_violation(command) for command in commands):
+        return GUIDANCE
+    if btw and any(readonly.obvious_write(command) for command in commands):
+        return readonly.GUIDANCE
+    return None

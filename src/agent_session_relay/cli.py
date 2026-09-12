@@ -35,6 +35,8 @@ def parser() -> argparse.ArgumentParser:
     )
     status = commands.add_parser("status", help="show session and review state")
     status.add_argument("--json", action="store_true", help="output structured state")
+    btw = commands.add_parser("btw", help="make the next prompt a one-turn, read-only aside")
+    btw.add_argument("--cancel", action="store_true", help="make the next prompt normal again")
     commands.add_parser("suspend", help="save the full review state and return to normal Git")
     resume = commands.add_parser("resume", help="restore a suspended session")
     resume.add_argument("session", nargs="?", help="session ID or unambiguous prefix")
@@ -59,9 +61,19 @@ def parser() -> argparse.ArgumentParser:
     agent_commands = agent.add_subparsers(dest="agent_command", required=True)
     agent_commands.add_parser("status", help="output agent-readable session state as JSON")
     diff = agent_commands.add_parser("diff", help="inspect review/provenance patches")
-    diff.add_argument("kind", choices=("reviewed", "human", "pending"))
+    diff.add_argument("kind", choices=("reviewed", "human", "pending", "btw"))
+    diff.add_argument("--turn", type=int, help="saved btw turn number (for diff btw)")
+    diff.add_argument("--staged", action="store_true", help="inspect saved btw index changes")
     diff.add_argument("--name-only", action="store_true", help="only output involved file names")
     diff.add_argument("-z", "--null", action="store_true", help="NUL delimit --name-only output")
+    restore = agent_commands.add_parser(
+        "restore-btw",
+        help="apply saved btw changes during a normal agent turn, leaving them unstaged",
+    )
+    restore.add_argument("turn", type=int, help="saved btw turn number")
+    restore.add_argument(
+        "--staged", action="store_true", help="retrieve the saved index delta instead"
+    )
     kiro = commands.add_parser("kiro", help="Kiro integration")
     kiro_commands = kiro.add_subparsers(dest="kiro_command", required=True)
     installer = kiro_commands.add_parser("install", help="install standalone Kiro lifecycle hooks")
@@ -126,6 +138,13 @@ def execute(args, paths: list[str]) -> int:
             f"Message: {message_subject(session['message'])}\n"
             "Review with normal Git staging; send a prompt in Kiro to hand off to the agent."
         )
+    elif args.command == "btw":
+        mode = relay.set_btw(cancel=args.cancel)
+        print(
+            "Next prompt: btw (read-only, one turn). Review handoff will be deferred.\n"
+            "Use `relay btw --cancel` to cancel before submitting the prompt."
+            if mode == "btw" else "Next prompt: normal."
+        )
     elif args.command == "message":
         session = relay.set_message(
             message, args.session, editor=lambda initial: edit_message(relay.git, initial)
@@ -136,8 +155,14 @@ def execute(args, paths: list[str]) -> int:
             if args.null and not args.name_only:
                 raise RelayError("--null requires --name-only.")
             sys.stdout.buffer.write(
-                relay.diff(args.kind, paths, name_only=args.name_only, null=args.null)
+                relay.diff(
+                    args.kind, paths, name_only=args.name_only, null=args.null,
+                    number=args.turn, staged=args.staged,
+                )
             )
+        elif args.command == "agent" and args.agent_command == "restore-btw":
+            relay.restore_btw(args.turn, staged=args.staged)
+            print(f"Saved btw turn {args.turn} changes applied; they remain unstaged for review.")
         else:
             status = relay.status()
             if args.command == "agent" or args.json:
@@ -152,9 +177,14 @@ def execute(args, paths: list[str]) -> int:
                         )
                     print("Use `relay resume` to continue.")
             else:
+                turn_label = (
+                    "Current agent turn" if status["phase"] == "agent" else "Last agent turn"
+                )
                 print(
                     f"Session: {status['session']} "
                     f"({status['lifecycle']}, {status['phase']} turn)\n"
+                    f"{turn_label}: {status['turn_kind'] or 'none'}; "
+                    f"next prompt: {status['next_turn']}\n"
                     f"Message: {message_subject(status['message'])}\n"
                     f"Base: {status['base_commit']}\nReviewed: {status['reviewed_checkpoint']}\n"
                     f"Staged approvals: {'yes' if status['staged_approvals'] else 'none'}\n"
@@ -163,6 +193,13 @@ def execute(args, paths: list[str]) -> int:
                     "Turn provenance: "
                     f"{'available' if status['provenance']['available'] else 'none yet'}"
                 )
+                for recovery in status["btw_recoveries"]:
+                    number = recovery["turn"]
+                    print(
+                        f"Saved btw turn {number}: `relay agent diff btw --turn {number}` "
+                        "(--staged for index changes); "
+                        f"retrieve in a normal agent turn: `relay agent restore-btw {number}`"
+                    )
     elif args.command == "list":
         sessions = relay.list_sessions()
         if args.json:

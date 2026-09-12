@@ -69,6 +69,8 @@ class ShellGuardTests(unittest.TestCase):
             "relay finish",
             "relay abort",
             "relay suspend",
+            "relay btw",
+            "relay btw --cancel",
             'relay message -m "Change the session description"',
             "relay message",
             "relay kiro hook agent-stop",
@@ -144,6 +146,29 @@ class ShellGuardTests(unittest.TestCase):
         self.assertIsNotNone(violation({"tool_name": "shell", "tool_input": {}}))
         self.assertIsNotNone(violation({}))
 
+    def test_btw_blocks_known_writes_without_restricting_normal_turns(self):
+        for name in ("fs_write", "writeFile", "apply_patch", "@filesystem/edit_file"):
+            payload = {"tool_name": name, "tool_input": {"path": "Token.kt"}}
+            self.assertIn("read-only btw", violation(payload, btw=True))
+            self.assertIsNone(violation(payload))
+        for command in (
+            "rm Token.kt", "touch new.txt", "cat source > destination", "echo x >>file",
+            "sed -i s/a/b/ Token.kt", "cat Token.kt; mv Token.kt Old.kt",
+            "relay agent restore-btw 2",
+        ):
+            with self.subTest(command=command):
+                payload = {"tool_name": "execute_bash", "tool_input": {"command": command}}
+                self.assertIn("read-only btw", violation(payload, btw=True))
+                self.assertIsNone(violation(payload))
+        for command in (
+            "cat Token.kt", "rg 'rm Token.kt' .", "echo '>'", "sed -n '1,20p' Token.kt",
+            "relay agent diff human -- Token.kt", "relay agent status",
+            # Arbitrary scripts are deliberately outside the best-effort parser's scope.
+            "python3 custom_script.py",
+        ):
+            payload = {"tool_name": "shell", "tool_input": {"command": command}}
+            self.assertIsNone(violation(payload, btw=True), command)
+
 
 class KiroHookTests(RepositoryTest):
     def git_files(self):
@@ -208,6 +233,23 @@ class KiroHookTests(RepositoryTest):
         self.assertEqual(
             self.run_relay("kiro", "hook", "pre-tool-use", input="bad json", ok=False).returncode, 2
         )
+
+    def test_btw_guard_is_active_only_for_the_open_btw_turn(self):
+        self.run_relay("start")
+        self.run_relay("btw")
+        payload = {"tool_name": "fs_write", "tool_input": {"path": "Token.kt", "content": "x"}}
+        self.hook("pre-tool-use", payload)
+        self.hook("prompt-submit")
+        before = self.git_files()
+        denied = self.hook("pre-tool-use", payload, ok=False)
+        self.assertIn("read-only btw", denied.stderr)
+        self.assertEqual(self.git_files(), before)
+        self.hook("pre-tool-use", {
+            "tool_name": "shell", "tool_input": {"command": "relay agent diff human"},
+        })
+        self.hook("agent-stop")
+        self.hook("prompt-submit")
+        self.hook("pre-tool-use", payload)
 
     def test_hook_workspace_discovery_and_conversation_ownership(self):
         self.run_relay("start")

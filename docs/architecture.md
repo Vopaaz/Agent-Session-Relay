@@ -18,28 +18,53 @@ the review surface without requiring a custom diff renderer or a second copy of 
 | Pn | Pre-agent snapshot for turn n |
 | Qn | Post-agent snapshot for turn n |
 
-At Prompt Submit, with `I` and `W` captured independently:
+At a normal Prompt Submit, with `I` and `W` captured independently:
 
 1. Remember the previous reviewed checkpoint `Rold`.
 2. If `tree(I)` differs from `tree(Rold)`, create a checkpoint with tree I and parent Rold.
 3. Move only detached HEAD and the internal reviewed ref to the new checkpoint; load its tree into I.
 4. Leave working files untouched, including partial-file proposals and untracked files.
-5. Save W as Pn, and record `(Rold, Rnew, Qn-1, Pn)` for provenance.
-6. Mark the phase `agent`. The adapter emits the stable protocol.
+5. Save W as Pn, and record `(Rold, Rnew, last_normal_post, Pn)` for provenance.
+6. Mark the phase `agent`. The adapter emits the protocol and any human-changed file names.
 
 The initial `Q0` is B. Thus edits made between start and the first prompt are human proposals.
 
-At Agent Stop, save W as Qn and mark the phase `human`. Reset only the index to R, ensuring agent
+At a normal Agent Stop, save W as Qn and mark the phase `human`. Reset only the index to R, ensuring agent
 output remains unreviewed even if a tool accidentally staged it. A duplicate Stop in the human phase
 does nothing, so it cannot erase approvals made after the first Stop.
+
+## One-turn btw
+
+`relay btw` sets `next_turn=btw`; `--cancel` resets it to `normal`. This changes only metadata, in
+the human phase. The next successful Prompt Submit consumes the selection and stores a turn with
+`kind=btw`, Pn, and the expanded full index. It leaves R, HEAD, and I alone. Duplicate prompts use
+the open turn's kind and original snapshots. Turn numbers count both normal and btw activities.
+
+The btw human view is `last_normal_post → Pn`; its reviewed view is empty. Btw does not advance
+`last_post`, so human changes accumulate across any number of btw turns until a normal handoff.
+An initial btw uses B as the human baseline. Inspecting a diff never consumes it.
+
+At btw Stop, capture Qn and compare the workspace and normalized index with entry. If unchanged,
+only record completion. If changed, pin Qn and the post index, including staged-only blobs and
+intent-to-add, before restoring Pn and the pre index. Reuse the existing transaction journal for
+rollback and interruption recovery. The adapter reports restoration only after it succeeds.
+The main review baseline is unchanged in either case; the next prompt defaults to normal.
+
+Saved output is inspected with `relay agent diff btw --turn N`, or `--staged` for the index delta.
+`relay agent restore-btw N [--staged]` applies that delta to the current workspace only during an
+open normal agent turn. It checks applicability before applying and leaves I unchanged. Conflicts
+require inspecting/adapting the patch rather than overwriting later work. Both snapshots and recovery
+records belong to the session namespace; finish/abort removes them with the rest of the session.
+There is no extra recovery branch or permanent btw state.
 
 ## Semantic inspection
 
 | View | Git tree comparison |
 | --- | --- |
 | Reviewed | Rold → Rnew at the latest handoff |
-| Human | Qn-1 → Pn at the latest handoff |
+| Human | Latest normal Q → Pn at the latest turn entry |
 | Pending | R → live W |
+| Btw recovery | Saved btw Pn → Qn (or pre-index tree → post-index tree with `--staged`) |
 
 Partial-hunk approval is represented by Git's actual index tree, not a per-file label. Human
 provenance includes discards, reversions, additions, and deletions during the human interval. It
@@ -52,7 +77,8 @@ The reviewed/human views stay fixed while the agent works; only pending is live.
 
 Snapshot and diff operations use a temporary index. Snapshotting copies the real index, expands any
 split index, accounts for tracked files removed from the index but still present on disk, stages the
-workspace only in the private index, and writes a tree. Paths and patches stay within Git's binary,
+workspace only in the private index, and writes a tree. R and the latest effective workspace snapshot
+keep previously captured project files in scope even after ignore rules change. Paths and patches stay within Git's binary,
 symlink, executable-bit, ignore, and attribute semantics. Git hooks and external diff/textconv drivers
 are not run by Relay; ordinary clean/smudge filters still apply.
 
@@ -72,6 +98,12 @@ refs/relay/sessions/<id>/
   message                   Optional commit whose native message describes the session
   turn-000001-pre            P1 (and subsequent turn snapshots)
   turn-000001-post           Q1
+  turn-000002-pre-index      Btw entry: expanded raw index blob
+  turn-000002-pre-staged     Btw entry: staged-only object protection
+  turn-000002-pre-intent-to-add
+  turn-000002-post-index     Present when btw changed workspace/index
+  turn-000002-post-staged
+  turn-000002-post-intent-to-add
   suspend-workspace         Full suspended W
   suspend-index             Blob containing the expanded raw Git index
   suspend-staged            Commit protecting all staged blobs from GC
@@ -89,6 +121,7 @@ Snapshot commits have B as their parent; checkpoint commits have the previous ch
 Per-turn metadata retains pre/post and provenance commit IDs. Session IDs include UTC time and a
 random suffix, so multiple worktrees can share the object database/ref namespace without sharing an
 active session. Sessions in another worktree are managed from that worktree.
+State uses schema 2. There is no migration or compatibility reader for sessions from other versions.
 
 ## Suspend, resume, finish, abort
 
@@ -163,7 +196,7 @@ Duplicate prompt events during the same open turn preserve its original provenan
 ## Adapter boundary
 
 An adapter discovers the active worktree, parses lifecycle metadata, calls `handoff` / `stop`, emits
-the stable protocol, and translates the harness's tool events into guard decisions. The core does
+the mode-specific protocol plus normal-turn human file names, and translates tool events into guard decisions. The core does
 not read prompt text or call an agent API. New adapters belong under `integrations/<harness>/`.
 
 Kiro is implemented; other harnesses are extension points. The shell parser is a workflow guard,

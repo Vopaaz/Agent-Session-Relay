@@ -9,7 +9,7 @@ from ...core.errors import RelayError
 from ...core.git import Git
 from ...core.session import Relay
 from ...core.storage import atomic_json
-from ..protocol import PROTOCOL
+from ..protocol import protocol
 from .guard import violation
 
 
@@ -93,13 +93,22 @@ def run_hook(event: str) -> int:
     if not isinstance(owner, str):
         owner = None
     if event == "prompt-submit":
-        if relay.handoff(owner):
-            sys.stdout.write(PROTOCOL)
+        if context := relay.handoff(owner):
+            sys.stdout.write(protocol(context))
     elif event == "agent-stop":
-        relay.stop(owner)
+        if recovery := relay.stop(owner):
+            number = recovery["turn"]
+            sys.stdout.write(
+                f"BTW turn {number} wrote changes; "
+                "the original workspace and staging were restored.\n"
+                f"Saved changes: `relay agent diff btw --turn {number}` "
+                "(add --staged to inspect index changes).\n"
+                f"Retrieve during a normal agent turn: `relay agent restore-btw {number}`.\n"
+                "These saved changes are deleted at session finish/abort.\n"
+            )
     else:
         relay.store.assert_ready()
-        reason = violation(payload)
+        reason = violation(payload, btw=relay.btw_active())
         if reason:
             sys.stderr.write(reason + "\n")
             return 2

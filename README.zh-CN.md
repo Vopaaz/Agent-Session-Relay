@@ -22,7 +22,7 @@ Agent 修改了四个文件，你认可其中一个，只 stage 另一个文件�
 Reviewed 是 **soft approval**，不是锁定。Agent 可以再次 rename、refactor 或修改已经认可的代码，
 新 delta 会重新成为 pending review。用户亲手编辑的代码也可以继续调整，并不具有不可修改的权威性。
 
-每次提交 prompt，Relay 自动将 staged approvals 吸收到内部 reviewed checkpoint，让 index 相对
+每次提交普通 prompt，Relay 自动将 staged approvals 吸收到内部 reviewed checkpoint，让 index 相对
 新 checkpoint 保持 clean，并保留其余 proposals。Agent Stop 时保存输出快照，修改仍以正常
 unstaged changes 或未跟踪新文件的形式显示。
 
@@ -88,12 +88,13 @@ relay kiro install --project
 
 | 事件 | Relay 的操作 |
 | --- | --- |
-| Prompt Submit (`UserPromptSubmit`) | 吸收 staged approvals、保存 pre-agent 快照、记录 review/human provenance、注入 Relay 协议 |
-| Agent Stop (`Stop`) | 保存本轮 post-agent 快照，让 Agent 的修改保持 pending |
-| Pre Tool Use (`PreToolUse`) | 拦截 Agent 直接执行 Git，引导使用 `relay agent` |
+| Prompt Submit (`UserPromptSubmit`) | 保存快照并注入本轮协议；普通 turn 还会吸收 approvals、列出 human 改动文件 |
+| Agent Stop (`Stop`) | 普通输出保持 pending；btw 意外写入先保存，再恢复原 review 状态 |
+| Pre Tool Use (`PreToolUse`) | 拦截直接 Git 调用；btw 期间还会拦截已知写工具和明显的 shell 写入 |
 
-每个 active handoff 都注入完整、自包含的协议，解释 review 语义、允许再次修改 reviewed/user-edited
-code，以及所有查询命令。不需要单独安装 Agent Skill。具体文件列表与 patches 由 Agent 按需查询。
+每个 active turn 都注入适用于本轮模式的简洁、自包含协议。普通 turn 存在 human 改动时，
+自动注入完整文件列表，包括编辑和 discard；完整 patch 仍按需查询。Btw 不主动注入该列表，
+但保留语义查询。不需要单独安装 Agent Skill。
 
 **没有 active session 时，包括 suspended 期间，所有 hooks 都成功静默退出，不修改 Git，也不注入
 context。** 普通 Kiro 对话中的 Git 使用不受影响。
@@ -111,6 +112,7 @@ context。** 普通 Kiro 对话中的 Git 使用不受影响。
 | `relay start [-m "message"]` | 从完全 clean、稳定的 Git 工作区开始，可选填写本次工作的说明 |
 | `relay message [session] [-m "message"]` | 设置 session 说明；省略 `-m` 则打开 Git 编辑器 |
 | `relay status` | 查看 session 说明、生命周期、reviewed checkpoint、staged approvals 和剩余 proposals |
+| `relay btw [--cancel]` | 将下一轮设为只读插问；`--cancel` 取消尚未消费的选择 |
 | `relay suspend` | 保存完整 staging/workspace 状态，返回原分支 |
 | `relay resume [session]` | 恢复唯一的 suspended session，或指定 ID/前缀 |
 | `relay finish [-m "message"]` | 要求全部 review 完成和有效说明；尚无说明时打开编辑器，再创建唯一结果 commit |
@@ -123,6 +125,37 @@ context。** 普通 Kiro 对话中的 Git 使用不受影响。
 Start 会拒绝 staged changes、unstaged changes、未忽略的 untracked files、未解决的 index conflicts，
 以及尚未完成的 merge/rebase/cherry-pick/revert/bisect 等操作。仓库需要已有初始 commit。
 Active 期间，用户使用 Git staging/discard；切分支、commit、stash 或修改 history 前请先 suspend。
+
+## 用 btw 临时插问
+
+Review 到一半时，执行 `relay btw`，再在 Kiro 中发送问题。它**只对下一轮生效**；
+`relay status` 显示当前与下一轮模式。发送前可用 `relay btw --cancel` 取消。
+此后的新 prompt 自动恢复普通模式，除非你再次选择 btw。
+
+Btw 保留 HEAD、staged approvals 和手动修改，不封存 approvals，也不推进主流程的 human diff
+起点。`relay agent diff human` 仍可查询，内容固定在 btw 开始时；查询不会消费改动。
+下一次普通 turn 会整体收到跨越这些 btw 的人类修改。Btw 中 `diff reviewed` 为空。
+与普通 turn 一样，等待 Agent Stop 后再编辑、stage 或 discard。
+
+协议要求 Agent 只读回答，需要实施时提示用户使用普通 turn。工具拦截以 best effort 识别已知
+文件写工具和明显的 shell 写入。如果仍发生写入，Stop 会先保存结果，再恢复进入 btw 时的
+工作区和完整 index；没有变化的文件不重写。恢复范围为已捕获的项目文件，不包括无关 ignored
+文件或仓库外副作用，也不构成执行沙箱。
+
+`relay status` 和 Stop 提示会列出已保存的 btw 轮次。以第 2 轮为例：
+
+```bash
+relay agent diff btw --turn 2                 # 保存的 workspace delta
+relay agent diff btw --turn 2 --staged        # 保存的 index delta，包括只存在于 staging 的内容
+relay agent restore-btw 2                     # 在普通 agent turn 中取回 workspace delta
+```
+
+仅允许在普通 handoff 后取回，因此来源仍为 Agent，修改保持 unstaged。取回命令加 `--staged`
+则把保存的 index delta 作为 unstaged workspace 修改应用。若与当前代码冲突，取回不修改现场，
+Agent 可以查看 patch 后自行适配。Btw 恢复记录属于当前 session，finish/abort 会统一清理。
+Suspend/resume 保留这些记录和下一轮 btw 选择。状态格式不跨版本兼容；升级前请用原版本
+finish 或 abort 所有已有 session。从 v0.2.x 升级到 v0.3.0 时，还需要清理旧版留下的空状态文件，
+具体见[升级说明](docs/releases/v0.3.0.md#upgrading-from-v02x)。
 
 ## Session 说明与 commit message
 
@@ -143,7 +176,7 @@ relay finish      # 审阅完成后使用已有说明；尚未填写则打开编
 ```bash
 relay agent status                         # JSON 概览，不默认输出完整 patch
 relay agent diff reviewed                  # 最近 handoff 中刚认可的精确 hunks
-relay agent diff human                     # 上一轮 Agent Stop → 当前 pre-agent 快照
+relay agent diff human                     # 上一轮普通 Agent Stop → 当前 pre-agent 快照
 relay agent diff pending                   # Reviewed checkpoint → 实时 workspace
 ```
 

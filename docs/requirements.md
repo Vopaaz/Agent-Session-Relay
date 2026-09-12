@@ -192,7 +192,9 @@ base_commit = C
 
 # 6. Human → Agent handoff
 
-Kiro `Prompt Submit` hook 是 handoff boundary。
+普通 turn 的 Kiro `Prompt Submit` hook 是 review handoff boundary。
+
+一次性只读 btw turn 的规则见第 22 节。
 
 如果没有 active Relay session，或者 Relay 当前 suspended：
 
@@ -251,13 +253,14 @@ Relay 保存足够的信息，使 Agent 后续可以通过 Relay 查询：
 * 当前仍 pending 的完整 patch；
 * 各类 patch 涉及的文件列表。
 
-这些信息按需通过 `relay agent ...` 暴露，不需要默认全部塞进 Agent prompt。
+普通 turn 存在 human 改动时，必须自动注入完整的 human 文件列表，并明确说明有人类修改。
+完整 patches 仍由 Agent 按需通过 `relay agent ...` 查询，不默认注入。
 
 ### 4. Inject Relay protocol
 
 Prompt Submit hook 每次 active Relay handoff 都应注入一段相对稳定、自包含的 Relay 使用说明。
 
-重点不是提前告诉 Agent “哪些具体文件变了”，而是让一个此前完全不知道 Agent-Session-Relay 的 Agent 理解：
+除普通 turn 自动注入 human 文件列表外，协议应以简洁、自包含的说明让此前不了解 Relay 的 Agent 理解：
 
 * 当前 workspace 正处于 Relay session；
 * Relay 是什么；
@@ -366,7 +369,9 @@ relay agent diff reviewed --name-only
 
 显示：
 
-> 上一轮 Agent Stop 之后，用户直接修改 workspace 所产生的具体代码变化。
+> 上一轮普通 Agent Stop（初始为 session base）之后，截至本轮 pre 快照的人类修改。
+
+Btw 不推进此起点；查询不会消费改动。
 
 它表达 provenance 和用户方向性提示，但不意味着这些内容不可修改。
 
@@ -467,7 +472,7 @@ Relay 自己内部执行 Git 不受此限制。
 
 # 9. Agent behavior
 
-Agent 可以自由修改任意 project code：
+普通 turn 的 Agent 可以自由修改任意 project code；btw turn 只读（第 22 节）：
 
 * pending code；
 * user-edited code；
@@ -486,7 +491,7 @@ Relay 不阻止这种修改。
 
 # 10. Agent → Human
 
-Kiro `Agent Stop` hook：
+普通 turn 的 Kiro `Agent Stop` hook：
 
 1. 保存完整 post-agent snapshot；
 2. 更新本轮 provenance；
@@ -633,7 +638,7 @@ Prompt Submit hook：
 5. 保存本轮 review/human-edit provenance；
 6. 再次向 Agent 注入 Relay protocol 和 `relay agent` 使用方式。
 
-Hook 不需要主动把具体文件变化全部塞进 context。
+普通 turn 存在 human 改动时，hook 自动注入 human 文件列表；完整 diff 仍按需查询。
 
 Agent 可以先自行查询：
 
@@ -991,7 +996,9 @@ Agent-Session-Relay 是一个新工具，不能假设 Agent 已通过训练了�
 * `--name-only`；
 * path filtering。
 
-具体本轮修改了哪些文件，不需要作为 hook injection 的主要内容。
+普通 turn 有 human 改动时，自动注入完整 human 文件列表，包含编辑、discard、增删文件。
+Btw 不主动注入此列表，保留查询入口。任何模式均不默认注入完整 patch。
+协议只解释 Relay 特有语义与必要命令，不添加通用 Agent 行为指导或重复的模式说明。
 
 Agent 应根据当前任务自己决定：
 
@@ -1138,3 +1145,33 @@ workspace in a one-commit recovery branch before cleanup.
 ```
 
 Agent-Session-Relay 是 Git 上的一层 human/agent session abstraction，而不是新的 source control system 或 code review UI。
+
+
+---
+
+# 22. One-turn btw
+
+`relay btw` 将下一次 prompt 设为只读插问，`relay btw --cancel` 取消尚未开始的选择。
+Prompt Submit 成功开启本轮时消费选择；重复 hook 沿用本轮模式，下一条新 prompt 默认普通模式。
+`relay status` 显示当前和下一轮模式。Relay 不解释自然语言 prompt 来自动决定模式。
+
+Btw 在 Prompt Submit 保存完整 workspace 和 index，保留 HEAD、reviewed checkpoint、staged approvals。
+Human diff 固定为上次普通 Agent Stop 到本轮入口的变化；reviewed diff 为空，pending 保持实时。
+Btw 的查询和 Stop 均不消费 review 进度，下一次普通 turn 整体接收跨越 btw 的人类修改。
+人类与 Agent 的非只读操作在时间上严格隔离，不额外实现并发操作检测。
+
+只读采用三层机制：简洁的模式协议、PreToolUse 对已知写工具和明显写命令的 best-effort 拦截、
+Stop 时的快照校验。拦截不扩展为通用 shell 副作用分析器，不追求穷尽覆盖。
+如果请求需要实施，Agent 应说明本轮只读并请用户发送新的普通 prompt，不能自行切换模式。
+
+Stop 无变化时不重写工作区或 index；有变化时先保存 workspace 和完整 index，再恢复入口状态。
+只恢复已捕获的项目范围，不承诺恢复无关 ignored 文件或外部副作用。失败处理复用既有事务机制，
+以正常工作和代码可维护性优先，不为极小概率场景增加大量防御逻辑。
+
+`relay agent diff btw --turn N [--staged]` 查看保存的 workspace 或 index delta。
+`relay agent restore-btw N [--staged]` 仅能在普通 agent turn、handoff 之后取回，修改保持 unstaged，
+不把取回内容误算为人类修改。无法应用时不覆盖当前代码，交由 Agent 查看并适配 patch。
+恢复记录全部属于 session，suspend/resume 保留，finish/abort 统一清理，不增加长期恢复分支。
+
+不提供跨版本活动 session 的 backward compatibility，不编写旧格式迁移或兼容读取。
+注入词使用不继承开发对话上下文的子代理评估和精简，迭代不超过 5 轮。
