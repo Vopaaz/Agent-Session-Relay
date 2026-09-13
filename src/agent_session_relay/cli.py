@@ -7,6 +7,8 @@ import sys
 from . import __version__
 from .core.errors import RelayError
 from .core.git import Git
+from .core.readonly_git import COMMANDS
+from .core.readonly_git import run as run_readonly_git
 from .core.session import Relay
 from .editor import edit_message
 from .integrations.kiro.adapter import install, run_hook
@@ -60,6 +62,21 @@ def parser() -> argparse.ArgumentParser:
     agent = commands.add_parser("agent", help="agent-facing semantic inspection")
     agent_commands = agent.add_subparsers(dest="agent_command", required=True)
     agent_commands.add_parser("status", help="output agent-readable session state as JSON")
+    git = agent_commands.add_parser(
+        "git", help="run a supported read-only Git query outside this session's changes",
+        description=(
+            "Run supported read-only Git queries; prefer relay agent diff for current-session "
+            "changes. Relay-managed refs/commits are accepted, but include internal bookkeeping. "
+            "Commands: " + ", ".join(sorted(COMMANDS)) + ". "
+            "Use branch/tag --list for patterns; config get/list or --get/--get-all/"
+            "--get-regexp/--get-urlmatch/--list; reflog show/exists; worktree list; "
+            "remote [-v] or remote get-url. Unknown options, write forms, global Git options, "
+            "aliases, output files, external diff/textconv, and signature verification "
+            "are unsupported. "
+            "Arguments and streams retain Git syntax and exit codes; paths are relative to cwd."
+        ),
+    )
+    git.add_argument("git_args", nargs=argparse.REMAINDER, help="Git subcommand and arguments")
     diff = agent_commands.add_parser("diff", help="inspect review/provenance patches")
     diff.add_argument("kind", choices=("reviewed", "human", "pending", "btw"))
     diff.add_argument("--turn", type=int, help="saved btw turn number (for diff btw)")
@@ -128,6 +145,8 @@ def execute(args, paths: list[str]) -> int:
         if args.project:
             print("Commit the project hook file before `relay start`, or install globally instead.")
         return 0
+    if args.command == "agent" and args.agent_command == "git":
+        return run_readonly_git(args.git_args)
     relay = Relay(Git())
     messages = getattr(args, "message", None)
     message = "\n\n".join(messages) if messages is not None else None
@@ -254,11 +273,17 @@ def execute(args, paths: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     paths = []
+    git_args = None
+    if argv[:2] == ["agent", "git"] and argv[2:] not in (["--help"], ["-h"]):
+        # Relay must not consume Git options, reorder them, or reinterpret its --.
+        git_args, argv = argv[2:], argv[:2]
     # Everything after -- is a literal path, even a name such as --name-only.
     if "--" in argv and argv[:2] == ["agent", "diff"]:
         boundary = argv.index("--")
         paths, argv = argv[boundary + 1 :], argv[:boundary]
     args = parser().parse_args(argv)
+    if git_args is not None:
+        args.git_args = git_args
     try:
         return execute(args, paths)
     except BrokenPipeError:

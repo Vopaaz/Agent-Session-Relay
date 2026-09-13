@@ -468,6 +468,19 @@ Kiro integration 应在 active Relay session 中通过 tool hook 阻止 Agent �
 
 Relay 自己内部执行 Git 不受此限制。
 
+### 只读 Git 透传窗口
+
+Agent 可用 `relay agent git <subcommand> <args...>` 查询当前 session 之外的历史。
+当前 session 的改动优先通过 `relay agent diff` 理解；注入词简短提示不要将 Relay-managed
+refs、branches 或 commits 当作普通项目历史解读，因为其中包含内部记账信息。
+直接 Git 调用仍然拦截；normal 与 btw turn 都可使用这个只读入口。
+
+只允许明确识别的只读命令与参数组合，未知形式默认拒绝。混合读写子命令只开放查询形式，
+拒绝写入选项、alias、自定义扩展与未经允许的全局选项。关闭 pager、external diff/textconv、
+自动刷新 index 等附带行为。只读校验集中在命令内部，不依赖某一个 harness 的 hook。
+不检查参数是否引用 Relay-managed commit/ref/branch，也不因此拒绝查询。
+保留 Git 参数、当前目录、标准输入输出和退出码；支持范围见 `docs/agent-git.md`。
+
 ---
 
 # 9. Agent behavior

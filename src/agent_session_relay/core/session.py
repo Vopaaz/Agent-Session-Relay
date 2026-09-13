@@ -573,6 +573,7 @@ class Relay:
                     "relay agent diff reviewed",
                     "relay agent diff human",
                     "relay agent diff pending",
+                    "relay agent git <args...>",
                 ],
                 "diff_options": ["--name-only", "-- path/to/file [path/to/other]"],
             }

@@ -153,8 +153,9 @@ relay agent restore-btw 2                     # 在普通 agent turn 中取回 w
 仅允许在普通 handoff 后取回，因此来源仍为 Agent，修改保持 unstaged。取回命令加 `--staged`
 则把保存的 index delta 作为 unstaged workspace 修改应用。若与当前代码冲突，取回不修改现场，
 Agent 可以查看 patch 后自行适配。Btw 恢复记录属于当前 session，finish/abort 会统一清理。
-Suspend/resume 保留这些记录和下一轮 btw 选择。状态格式不跨版本兼容；升级前请用原版本
-finish 或 abort 所有已有 session。从 v0.2.x 升级到 v0.3.0 时，还需要清理旧版留下的空状态文件，
+Suspend/resume 保留这些记录和下一轮 btw 选择。v0.3.0 和 v0.4.0 共用 schema 2，
+已有 v0.3.0 session 无需迁移。从 v0.2.x 升级前，请用原版本 finish 或 abort 所有已有 session，
+并清理旧版留下的空状态文件，
 具体见[升级说明](docs/releases/v0.3.0.md#upgrading-from-v02x)。
 
 ## Session 说明与 commit message
@@ -178,6 +179,7 @@ relay agent status                         # JSON 概览，不默认输出完整
 relay agent diff reviewed                  # 最近 handoff 中刚认可的精确 hunks
 relay agent diff human                     # 上一轮普通 Agent Stop → 当前 pre-agent 快照
 relay agent diff pending                   # Reviewed checkpoint → 实时 workspace
+relay agent git log --oneline main          # 只读查询当前 session 之外的历史
 ```
 
 所有 diff 都支持 `--name-only` 和 `--` 后的路径过滤：
@@ -198,6 +200,17 @@ Patch 包含 binary changes；rename 以删除/新增显示，便于明确过滤
 第一次 handoff 前，前两个 diff 为空。Human diff 包含直接编辑以及 **discard**，因为两者都是 Agent
 Stop 后的 workspace 变化。这只表达来源与方向，不表示那些行必须原样保留。下一次 handoff 前，
 本轮 staged approvals 仍包含在相对旧 reviewed checkpoint 的 delta 中。
+
+查询当前 session 之外的改动时，使用 `relay agent git <subcommand> <args...>`。
+命令透传明确支持的只读 Git 查询，保留参数、stdin/stdout/stderr、退出码和当前目录。
+Active session（包括 btw）仍然拦截直接 Git 调用。当前 session 的改动优先使用 `relay agent diff`；
+不要把 Relay-managed refs、branches 或 commits 当成普通项目历史解读，它们包含内部记账信息。
+参数涉及这些对象仍会被允许：校验只关注操作是否只读，不识别目标是否由 Relay 管理。
+
+只有明确支持的命令与参数组合会被允许，未知形式默认拒绝。例如，
+`relay agent git branch --list 'feature/*'` 可用；创建分支、`diff --output=file`、
+`describe --dirty` 会被拒绝。Alias 以及 `-c`、`-C` 等 Git 全局选项也不支持。
+完整说明见 `relay agent git --help` 和[支持的查询形式](docs/agent-git.md)。
 
 ## 完整的多轮 partial-review 示例
 

@@ -23,6 +23,12 @@ sandbox: executable scripts, dynamically generated programs, custom aliases, ren
 unrecognized MCP tools can execute Git indirectly. Use the harness's actual permission/sandbox
 controls for hostile code. Never grant a guard a broader security role than its tested command parser.
 
+The `relay agent git` entry point separately validates explicitly supported read-only command/option
+forms before invoking Git. Unknown forms, write options, aliases, and execution overrides are
+rejected. It suppresses common query side effects and does not classify Relay-managed targets.
+This remains a workflow boundary with trusted repository configuration and ordinary clean filters,
+not isolation of arbitrary programs. See [supported queries and execution behavior](docs/agent-git.md).
+
 Btw's write guard is also best effort: it recognizes common writing tools and commands, not arbitrary
 program behavior. The Stop fallback saves unexpected captured project changes before restoring the
 entry workspace/index. It does not restore unrelated ignored files, files outside the repository,

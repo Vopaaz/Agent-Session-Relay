@@ -15,7 +15,8 @@ GUIDANCE = (
     "Agent-Session-Relay is active. Direct Git commands (including inspection) and "
     "human-only Relay lifecycle commands are blocked. Use `relay agent status`, "
     "`relay agent diff reviewed`, `relay agent diff human`, or "
-    "`relay agent diff pending` (with --name-only or -- paths as needed)."
+    "`relay agent diff pending` (with --name-only or -- paths as needed). "
+    "For read-only inspection outside this session, use `relay agent git <args...>`."
 )
 SHELL_TOOLS = {
     "shell",

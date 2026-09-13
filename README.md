@@ -160,9 +160,9 @@ Retrieval is allowed only after a normal handoff, so retrieved changes keep agen
 remain unstaged. Add `--staged` to retrieve the saved index delta as unstaged workspace changes instead.
 If a patch conflicts with current work, retrieval leaves it untouched; the agent can inspect and
 adapt the saved patch. Saved btw records remain in this session and are deleted by finish/abort.
-Suspend/resume preserves them and any pending btw selection. State formats are version-specific;
-finish or abort all sessions with the version that started them before upgrading. For v0.2.x to
-v0.3.0, also remove the old empty metadata file as described in the
+Suspend/resume preserves them and any pending btw selection. Versions 0.3.0 and 0.4.0 share
+schema 2, so existing v0.3.0 sessions need no migration. Before upgrading from v0.2.x, finish or
+abort all sessions with the old version and remove its empty metadata file as described in the
 [upgrade instructions](docs/releases/v0.3.0.md#upgrading-from-v02x).
 
 ## Session messages
@@ -186,6 +186,7 @@ relay agent status                         # JSON summary; no complete patches
 relay agent diff reviewed                  # Exact newly accepted hunks at the latest handoff
 relay agent diff human                     # Previous normal Agent Stop → latest pre-agent snapshot
 relay agent diff pending                   # Reviewed checkpoint → live workspace
+relay agent git log --oneline main          # Read-only history outside this session
 ```
 
 Every diff supports `--name-only` and literal path filters after `--`:
@@ -208,6 +209,19 @@ live. Before the first handoff, the first two are empty. The human view includes
 discards**, since both change the workspace after the agent stops. It describes provenance, not
 ownership or an instruction to preserve those lines verbatim. Before the next handoff, staged
 approvals are still part of the delta against the previous reviewed checkpoint.
+
+For changes outside the current session, use `relay agent git <subcommand> <args...>`.
+It forwards supported read-only Git queries with the original arguments, stdin/stdout/stderr,
+exit code, and current directory. Direct Git remains blocked during active sessions, including btw.
+Prefer `relay agent diff` for current-session changes; avoid treating Relay-managed refs, branches,
+or commits as project history because they include internal bookkeeping. Queries mentioning those
+objects are allowed: the command validates the operation, not the identity of its targets.
+
+Only explicitly supported command/option combinations are allowed; unknown forms are rejected.
+For example, `relay agent git branch --list 'feature/*'` is supported, while creating a branch,
+`diff --output=file`, and `describe --dirty` are rejected. Aliases and global Git options such as
+`-c` and `-C` are unsupported. See `relay agent git --help` and the
+[supported query forms](docs/agent-git.md).
 
 ## A complete multi-turn partial-review example
 

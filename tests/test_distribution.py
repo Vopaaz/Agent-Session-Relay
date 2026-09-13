@@ -61,3 +61,10 @@ class DistributionTests(RepositoryTest):
         )
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout, "")
+
+    def test_standalone_archive_supports_readonly_git_queries(self):
+        self.assertEqual(self.packed("agent", "git", "show", "HEAD:Token.kt").stdout,
+                         "TokenDefinition\n")
+        denied = self.packed("agent", "git", "branch", "unexpected", ok=False)
+        self.assertIn("Only supported read-only Git queries", denied.stderr)
+        self.assertEqual(self.git("branch", "--list", "unexpected"), "")

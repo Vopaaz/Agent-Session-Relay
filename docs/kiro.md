@@ -58,6 +58,12 @@ It also blocks human-only `relay` lifecycle commands from agent shell calls. Dyn
 pre-existing shell aliases, arbitrary scripts, and renamed binaries are outside this guard's scope;
 harness sandboxing remains separate.
 
+`relay agent git <args...>` is allowed through the hook in normal and btw turns. The command itself
+enforces an explicit allowlist of read-only Git query forms, so bypassing the hook does not bypass
+that validation. Direct `git` calls remain blocked. The injected protocol prefers semantic diffs
+for current-session changes and reserves this entry point for inspection outside the session;
+Relay-managed objects are accepted without target classification. See [query forms](agent-git.md).
+
 Btw uses a separate small best-effort guard (`readonly.py`) for known write tools, output redirection,
 common file-writing commands, and in-place sed/perl. It does not attempt to infer arbitrary scripts'
 side effects or expand the existing Git parser. Writes that escape this guard are saved at Stop
@@ -77,6 +83,8 @@ with real Git, but do not launch or impersonate a real Kiro agent service.
    introduces Relay and that Agent Stop leaves the changes unstaged.
 4. Ask the agent to run `git diff`. Verify PreToolUse blocks it with Relay command guidance. A
    `relay agent diff pending` tool call must succeed instead.
+   Also verify `relay agent git log --oneline main` succeeds and `relay agent git branch unexpected`
+   is rejected by the command without creating a branch.
 5. Stage one hunk in your normal Git UI, edit another hunk manually, and send a second prompt. Verify
    staged approvals are sealed, `diff reviewed` shows that exact hunk, `diff human` shows the manual
    edit, and `diff pending` shows the unresolved remainder. The hook must list human-changed paths,

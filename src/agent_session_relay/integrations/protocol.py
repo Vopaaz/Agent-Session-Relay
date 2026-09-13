@@ -19,6 +19,11 @@ INSPECTION = """Do not run Git directly. Leave session and turn-mode control to 
   relay agent diff human      # human edits/discards, fixed at turn start
   relay agent diff pending    # reviewed checkpoint to live workspace
 Diffs support --name-only and -- <paths...>; filter paths are relative to cwd.
+
+Use `relay agent git <args...>`, if necessary, for read-only inspection outside this session.
+Prefer `relay agent diff` for current-session changes.
+Avoid interpreting Relay-managed refs, branches, or commits as project history;
+they include internal bookkeeping.
 """
 
 

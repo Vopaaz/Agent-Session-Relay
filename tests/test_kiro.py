@@ -38,6 +38,8 @@ class ShellGuardTests(unittest.TestCase):
             "echo harmless; git diff",
             "echo before\ngit diff",
             "git diff | cat",
+            "relay agent git log -1; git status",
+            "relay agent git show $(git rev-parse HEAD)",
             "false || git log",
             "(git status)",
             "if git diff; then echo x; fi",
@@ -108,6 +110,9 @@ class ShellGuardTests(unittest.TestCase):
             "command python3 --version",
             "echo fine # git status",
             "relay agent status",
+            "relay agent git log --oneline --all",
+            "relay agent git diff main~1 main -- Parser.kt",
+            "env FOO=1 relay agent git show HEAD",
             "relay agent diff reviewed --name-only",
             "relay agent diff human -- Parser.kt Config.kt",
             "relay agent diff pending -- Parser.kt",
@@ -163,6 +168,7 @@ class ShellGuardTests(unittest.TestCase):
         for command in (
             "cat Token.kt", "rg 'rm Token.kt' .", "echo '>'", "sed -n '1,20p' Token.kt",
             "relay agent diff human -- Token.kt", "relay agent status",
+            "relay agent git log --oneline --all",
             # Arbitrary scripts are deliberately outside the best-effort parser's scope.
             "python3 custom_script.py",
         ):
@@ -218,6 +224,7 @@ class KiroHookTests(RepositoryTest):
         self.assertEqual(denied.returncode, 2)
         self.assertEqual(denied.stdout, "")
         self.assertIn("relay agent diff pending", denied.stderr)
+        self.assertIn("relay agent git <args...>", denied.stderr)
         self.assertEqual(self.git_files(), before)
         for command in (
             "relay agent status",

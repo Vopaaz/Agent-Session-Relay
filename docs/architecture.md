@@ -82,6 +82,13 @@ keep previously captured project files in scope even after ignore rules change. 
 symlink, executable-bit, ignore, and attribute semantics. Git hooks and external diff/textconv drivers
 are not run by Relay; ordinary clean/smudge filters still apply.
 
+Agent history queries use `core/readonly_git.py`, separately from Relay's internal Git plumbing.
+`relay agent git` validates explicit command/option forms before starting Git, preserves the
+caller's cwd and streams, and does not acquire a Relay lock or create session state. Its allowlist
+does not inspect ref names or object ownership. Queries mentioning Relay objects are accepted;
+the protocol directs agents to semantic diffs for session changes and discourages interpreting
+internal bookkeeping as project history. See [query behavior](agent-git.md).
+
 ## Storage
 
 Each worktree has its own state and lock:
