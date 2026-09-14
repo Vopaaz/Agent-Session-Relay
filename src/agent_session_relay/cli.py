@@ -77,11 +77,28 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     git.add_argument("git_args", nargs=argparse.REMAINDER, help="Git subcommand and arguments")
-    diff = agent_commands.add_parser("diff", help="inspect review/provenance patches")
-    diff.add_argument("kind", choices=("reviewed", "human", "pending", "btw"))
+    diff = agent_commands.add_parser(
+        "diff", help="inspect session/review/provenance changes",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "session   Session base -> live workspace; net human and agent changes, "
+            "approved or pending.\n"
+            "reviewed  Approvals sealed at the latest turn entry; fixed during the turn.\n"
+            "human     Human edits at the latest turn entry; fixed during the turn.\n"
+            "pending   Reviewed checkpoint -> live workspace.\n"
+            "btw       Saved btw changes selected with --turn N."
+        ),
+        epilog=(
+            "Use -- <paths...> for literal paths relative to cwd. "
+            "Empty diffs produce no output and exit 0; invalid options fail on stderr."
+        ),
+    )
+    diff.add_argument("kind", choices=("session", "reviewed", "human", "pending", "btw"))
     diff.add_argument("--turn", type=int, help="saved btw turn number (for diff btw)")
     diff.add_argument("--staged", action="store_true", help="inspect saved btw index changes")
-    diff.add_argument("--name-only", action="store_true", help="only output involved file names")
+    output = diff.add_mutually_exclusive_group()
+    output.add_argument("--name-only", action="store_true", help="only output involved file names")
+    output.add_argument("--stat", action="store_true", help="show per-file change statistics")
     diff.add_argument("-z", "--null", action="store_true", help="NUL delimit --name-only output")
     restore = agent_commands.add_parser(
         "restore-btw",
@@ -175,7 +192,7 @@ def execute(args, paths: list[str]) -> int:
                 raise RelayError("--null requires --name-only.")
             sys.stdout.buffer.write(
                 relay.diff(
-                    args.kind, paths, name_only=args.name_only, null=args.null,
+                    args.kind, paths, name_only=args.name_only, null=args.null, stat=args.stat,
                     number=args.turn, staged=args.staged,
                 )
             )
@@ -183,7 +200,7 @@ def execute(args, paths: list[str]) -> int:
             relay.restore_btw(args.turn, staged=args.staged)
             print(f"Saved btw turn {args.turn} changes applied; they remain unstaged for review.")
         else:
-            status = relay.status()
+            status = relay.agent_status() if args.command == "agent" else relay.status()
             if args.command == "agent" or args.json:
                 print(json.dumps(status, indent=2))
             elif not status["active"]:

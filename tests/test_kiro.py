@@ -116,6 +116,7 @@ class ShellGuardTests(unittest.TestCase):
             "relay agent diff reviewed --name-only",
             "relay agent diff human -- Parser.kt Config.kt",
             "relay agent diff pending -- Parser.kt",
+            "relay agent diff session --stat -- Parser.kt",
             "relay --help",
             "relay --version",
             "python3 -m agent_session_relay agent status",
@@ -168,6 +169,7 @@ class ShellGuardTests(unittest.TestCase):
         for command in (
             "cat Token.kt", "rg 'rm Token.kt' .", "echo '>'", "sed -n '1,20p' Token.kt",
             "relay agent diff human -- Token.kt", "relay agent status",
+            "relay agent diff session --stat",
             "relay agent git log --oneline --all",
             # Arbitrary scripts are deliberately outside the best-effort parser's scope.
             "python3 custom_script.py",

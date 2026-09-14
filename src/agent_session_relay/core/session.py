@@ -200,12 +200,18 @@ class Relay:
 
     def handoff_context(self, session: dict) -> dict:
         turn = session["turns"][-1]
-        names = b""
+        human_names = reviewed_names = b""
         if turn["kind"] == "normal":
-            names = self.git.diff(turn["human_from"], turn["pre"], [], name_only=True, null=True)
+            human_names = self.git.diff(
+                turn["human_from"], turn["pre"], [], name_only=True, null=True
+            )
+            reviewed_names = self.git.diff(
+                turn["reviewed_from"], turn["reviewed_to"], [], name_only=True, null=True
+            )
         return {
             "kind": turn["kind"],
-            "human_paths": [os.fsdecode(name) for name in names.split(b"\0") if name],
+            "human_paths": [os.fsdecode(name) for name in human_names.split(b"\0") if name],
+            "reviewed_paths": [os.fsdecode(name) for name in reviewed_names.split(b"\0") if name],
         }
 
     def handoff(self, owner: str | None = None) -> dict | None:
@@ -554,6 +560,7 @@ class Relay:
                 "base_commit": session["base_commit"],
                 "origin": session["origin"],
                 "reviewed_checkpoint": session["reviewed"],
+                "session_changes": workspace != self.git.tree(session["base_commit"]),
                 "pending_changes": workspace != reviewed,
                 "staged_approvals": index != reviewed,
                 "unstaged_changes": workspace != index,
@@ -570,17 +577,30 @@ class Relay:
                 },
                 "inspection_commands": [
                     "relay agent status",
+                    "relay agent diff session",
                     "relay agent diff reviewed",
                     "relay agent diff human",
                     "relay agent diff pending",
                     "relay agent git <args...>",
                 ],
-                "diff_options": ["--name-only", "-- path/to/file [path/to/other]"],
+                "diff_options": [
+                    "--name-only", "--name-only -z", "--stat", "-- path/to/file [path/to/other]",
+                ],
             }
+
+    def agent_status(self) -> dict:
+        """Expose actionable review state without human controls or internal Git identities."""
+        status = self.status()
+        if not status["active"]:
+            return {"active": False}
+        return {key: status[key] for key in (
+            "active", "phase", "turn", "turn_kind", "session_changes", "pending_changes",
+            "provenance", "btw_recoveries",
+        )}
 
     def diff(
         self, kind: str, paths: list[str], *, name_only: bool = False, null: bool = False,
-        number: int | None = None, staged: bool = False,
+        stat: bool = False, number: int | None = None, staged: bool = False,
     ) -> bytes:
         if not self.active(self.store.load(), required=False):
             raise RelayError("No active Relay session. Use `relay start` or `relay resume`.")
@@ -593,8 +613,8 @@ class Relay:
                 left, right = self.recovery_trees(session, turn, staged=staged)
             elif number is not None or staged:
                 raise RelayError("--turn and --staged require `relay agent diff btw`.")
-            elif kind == "pending":
-                left = session["reviewed"]
+            elif kind in ("session", "pending"):
+                left = session["base_commit"] if kind == "session" else session["reviewed"]
                 right = self.workspace_tree(session)
             elif session["turns"]:
                 turn = session["turns"][-1]
@@ -604,4 +624,4 @@ class Relay:
                     left, right = turn["human_from"], turn["pre"]
             else:
                 left = right = session["reviewed"]
-            return self.git.diff(left, right, paths, name_only=name_only, null=null)
+            return self.git.diff(left, right, paths, name_only=name_only, null=null, stat=stat)

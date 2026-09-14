@@ -153,8 +153,10 @@ relay agent restore-btw 2                     # 在普通 agent turn 中取回 w
 仅允许在普通 handoff 后取回，因此来源仍为 Agent，修改保持 unstaged。取回命令加 `--staged`
 则把保存的 index delta 作为 unstaged workspace 修改应用。若与当前代码冲突，取回不修改现场，
 Agent 可以查看 patch 后自行适配。Btw 恢复记录属于当前 session，finish/abort 会统一清理。
-Suspend/resume 保留这些记录和下一轮 btw 选择。v0.3.0 和 v0.4.0 共用 schema 2，
-已有 v0.3.0 session 无需迁移。从 v0.2.x 升级前，请用原版本 finish 或 abort 所有已有 session，
+Suspend/resume 保留这些记录和下一轮 btw 选择。v0.3.0、v0.4.0 和 v0.5.0 共用 schema 2，
+已有 v0.3.0/v0.4.0 session 无需迁移。Agent status 返回字段的变化见
+[v0.5.0 release notes](docs/releases/v0.5.0.md#agent-status-compatibility)。
+从 v0.2.x 升级前，请用原版本 finish 或 abort 所有已有 session，
 并清理旧版留下的空状态文件，
 具体见[升级说明](docs/releases/v0.3.0.md#upgrading-from-v02x)。
 
@@ -176,18 +178,20 @@ relay finish      # 审阅完成后使用已有说明；尚未填写则打开编
 
 ```bash
 relay agent status                         # JSON 概览，不默认输出完整 patch
+relay agent diff session                   # Session 起点 → 实时 workspace，包含已认可和 pending 改动
 relay agent diff reviewed                  # 最近 handoff 中刚认可的精确 hunks
 relay agent diff human                     # 上一轮普通 Agent Stop → 当前 pre-agent 快照
 relay agent diff pending                   # Reviewed checkpoint → 实时 workspace
 relay agent git log --oneline main          # 只读查询当前 session 之外的历史
 ```
 
-所有 diff 都支持 `--name-only` 和 `--` 后的路径过滤：
+所有 diff（包括保存的 btw diff）都支持 `--name-only`、`--stat` 和 `--` 后的路径过滤：
 
 ```bash
 relay agent diff reviewed --name-only
 relay agent diff human --name-only
 relay agent diff pending --name-only
+relay agent diff session --stat
 relay agent diff reviewed -- Parser.kt
 relay agent diff human -- Parser.kt Config.kt
 relay agent diff pending -- src/parser/
@@ -195,11 +199,45 @@ relay agent diff pending -- src/parser/
 
 路径相对于命令执行时所在目录，按字面路径处理。脚本可以用 `--name-only -z` 获取 NUL 分隔的文件名。
 Patch 包含 binary changes；rename 以删除/新增显示，便于明确过滤路径。查询不会改变真实 index 或工作文件。
+`--stat` 和 `--name-only` 是互斥的输出格式。空 diff 不输出内容，退出码为 0；
+不支持的参数会以非零退出码失败，并在 stderr 输出错误信息。
 
-`reviewed` 和 `human` 固定在最近一次 handoff，Agent Stop 后也仍可查询；`pending` 始终实时更新。
+`session` 展示人类和 Agent 相对 session 固定起点的全部当前净变化，包括已认可的修改、pending proposals
+和新增项目文件；已还原的改动会抵消。封存审批不会改变这个视图。它不表示个人贡献或历史操作记录。
+
+`reviewed` 和 `human` 固定在最近一次 handoff，Agent Stop 后也仍可查询；`session` 和 `pending` 始终实时更新。
 第一次 handoff 前，前两个 diff 为空。Human diff 包含直接编辑以及 **discard**，因为两者都是 Agent
 Stop 后的 workspace 变化。这只表达来源与方向，不表示那些行必须原样保留。下一次 handoff 前，
 本轮 staged approvals 仍包含在相对旧 reviewed checkpoint 的 delta 中。
+
+普通 turn 的 hook 仅在本次 handoff 确实封存了审批时发出通知，并单独列出涉及路径，与 human edits 区分。
+只有被认可的 hunks 离开 `pending`；部分认可的文件仍可同时出现在 `reviewed` 和 `pending` 中。
+
+`relay agent status` 只输出有助于 Agent 判断当前状态的信息：
+
+```json
+{
+  "active": true,
+  "phase": "agent",
+  "turn": 2,
+  "turn_kind": "normal",
+  "session_changes": true,
+  "pending_changes": false,
+  "provenance": {"available": true, "newly_reviewed": true, "human_edits": false},
+  "btw_recoveries": []
+}
+```
+
+`phase` 为 `human` 或 `agent`；`turn`/`turn_kind` 表示当前或最近一轮（`normal` 或只读 `btw`，
+初始为 `0`/`null`）。`session_changes` 和 `pending_changes` 分别对应两个实时 diff；
+当所有修改均已认可时，前者可以为 true、后者为 false。
+`provenance` 描述最近一次 turn 入口，轮内固定不变，第一次 handoff 前不可用；其 flags 表示
+reviewed/human diff 是否有内容，也包含 btw 入口可查询的人类修改。
+`btw_recoveries` 列出保存的改动及其查询/取回命令。没有 active session 时，只返回 `{"active": false}`。
+
+Agent 概览不再包含 session ID、commit hash、origin、提交说明、下一轮控制信息、index/staging 细节
+以及静态命令列表。完整的人类诊断信息仍通过 `relay status --json` 查询；依赖这些字段的消费者应改用该命令。
+命令用法由 hook 和 `relay agent diff --help` 提供。
 
 查询当前 session 之外的改动时，使用 `relay agent git <subcommand> <args...>`。
 命令透传明确支持的只读 Git 查询，保留参数、stdin/stdout/stderr、退出码和当前目录。
@@ -229,8 +267,8 @@ Session 的 immutable base 为 `C`。在 Kiro 中发送：
 
 > Refactor the parser and move token configuration into the new config model.
 
-Prompt Submit hook 向 Agent 介绍 Relay review 协议，以及 `relay agent status` 和 `reviewed`、
-`human`、`pending` 三类 diff。Agent 修改 `Parser.kt`、`Token.kt`、`Config.kt`、`README.md`。
+Prompt Submit hook 向 Agent 介绍 Relay review 协议，以及 `relay agent status` 和 `session`、`reviewed`、
+`human`、`pending` 四类 diff。Agent 修改 `Parser.kt`、`Token.kt`、`Config.kt`、`README.md`。
 Agent Stop 保存输出快照，四个文件在普通 Git UI 中显示为 pending。
 
 用户逐项 review：
@@ -264,6 +302,7 @@ Changes:
 Prompt Submit 将 `Token.kt` 和 staged parser hunks 吸收到 reviewed checkpoint，清空 index 中相对
 新 checkpoint 的 delta，保留其余 Parser/Config pending changes。随后保存 pre-agent 快照和本轮
 review/human provenance，再次注入完整协议。
+Hook 列出 `Parser.kt`/`Token.kt` 包含本轮新认可的改动，以及 `Parser.kt`/`README.md` 存在人类编辑。
 
 Agent 可以先查看文件范围：
 
@@ -274,6 +313,8 @@ relay agent diff human --name-only
 # Parser.kt、README.md（discard 也是 human workspace change）
 relay agent diff pending --name-only
 # Config.kt、Parser.kt
+relay agent diff session --name-only
+# Config.kt、Parser.kt、Token.kt（全部当前变化，包含已认可的改动）
 ```
 
 再按需要查看具体 hunks：

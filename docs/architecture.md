@@ -25,7 +25,8 @@ At a normal Prompt Submit, with `I` and `W` captured independently:
 3. Move only detached HEAD and the internal reviewed ref to the new checkpoint; load its tree into I.
 4. Leave working files untouched, including partial-file proposals and untracked files.
 5. Save W as Pn, and record `(Rold, Rnew, last_normal_post, Pn)` for provenance.
-6. Mark the phase `agent`. The adapter emits the protocol and any human-changed file names.
+6. Mark the phase `agent`. The adapter emits the protocol, any newly approved paths, and any
+   human-changed paths as separate lists derived from the saved turn comparisons.
 
 The initial `Q0` is B. Thus edits made between start and the first prompt are human proposals.
 
@@ -61,6 +62,7 @@ There is no extra recovery branch or permanent btw state.
 
 | View | Git tree comparison |
 | --- | --- |
+| Session | B → live W (net changes by both human and agent, regardless of approval) |
 | Reviewed | Rold → Rnew at the latest handoff |
 | Human | Latest normal Q → Pn at the latest turn entry |
 | Pending | R → live W |
@@ -70,10 +72,24 @@ Partial-hunk approval is represented by Git's actual index tree, not a per-file 
 provenance includes discards, reversions, additions, and deletions during the human interval. It
 cannot distinguish who typed the same bytes; turn boundaries provide the provenance assumption.
 
-Agent status reports both the complete delta since R (`pending_changes`) and unsealed approvals
-(`staged_approvals`). `unstaged_changes` compares I to W and blocks finish when true; finish also
-requires a custom session message.
-The reviewed/human views stay fixed while the agent works; only pending is live.
+Agent status projects the shared status snapshot into `active`, `phase`, `turn`, `turn_kind`,
+`session_changes` (W != B), `pending_changes` (W != R), `provenance`, and `btw_recoveries`.
+The provenance flags describe the latest turn entry, including human edits at btw entry; before
+the first handoff, `available` and both change flags are false. Without an active session the
+agent sees only `active: false`. Internal identities, human controls, index details, and static
+help are omitted. Saved btw inspection/retrieval commands remain actionable and are preserved.
+Human `relay status --json` retains full diagnostics, including unsealed approvals
+(`staged_approvals`, I != R) and `unstaged_changes` (W != I). The latter blocks finish when true;
+finish also requires a custom session message.
+The reviewed/human views stay fixed while the agent works; session and pending are live. All views
+support patch output, `--name-only` (optionally `-z`), or `--stat`, with literal path filtering.
+Empty output remains a successful empty diff; invalid options fail on stderr with a nonzero exit.
+
+Approval notifications are derived from the turn's Rold → Rnew paths, not from the live index:
+sealing resets I to R, so `staged_approvals` is normally false after an actual approval. Duplicate
+hooks repeat the same saved approval/human context. Btw seals nothing and emits neither path list.
+An approved path may still contain pending hunks; notification wording does not imply file-level
+approval. No additional persistent event state is needed.
 
 Snapshot and diff operations use a temporary index. Snapshotting copies the real index, expands any
 split index, accounts for tracked files removed from the index but still present on disk, stages the
@@ -203,8 +219,9 @@ Duplicate prompt events during the same open turn preserve its original provenan
 ## Adapter boundary
 
 An adapter discovers the active worktree, parses lifecycle metadata, calls `handoff` / `stop`, emits
-the mode-specific protocol plus normal-turn human file names, and translates tool events into guard decisions. The core does
-not read prompt text or call an agent API. New adapters belong under `integrations/<harness>/`.
+the mode-specific protocol plus normal-turn approval and human file names, and translates tool
+events into guard decisions. The core does not read prompt text or call an agent API. New adapters
+belong under `integrations/<harness>/`.
 
 Kiro is implemented; other harnesses are extension points. The shell parser is a workflow guard,
 not a general interpreter or security sandbox. See [Kiro](kiro.md) and [SECURITY.md](../SECURITY.md).

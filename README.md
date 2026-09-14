@@ -160,8 +160,10 @@ Retrieval is allowed only after a normal handoff, so retrieved changes keep agen
 remain unstaged. Add `--staged` to retrieve the saved index delta as unstaged workspace changes instead.
 If a patch conflicts with current work, retrieval leaves it untouched; the agent can inspect and
 adapt the saved patch. Saved btw records remain in this session and are deleted by finish/abort.
-Suspend/resume preserves them and any pending btw selection. Versions 0.3.0 and 0.4.0 share
-schema 2, so existing v0.3.0 sessions need no migration. Before upgrading from v0.2.x, finish or
+Suspend/resume preserves them and any pending btw selection. Versions 0.3.0, 0.4.0, and 0.5.0 share
+schema 2, so existing v0.3.0/v0.4.0 sessions need no migration. For the agent status response change,
+see the [v0.5.0 release notes](docs/releases/v0.5.0.md#agent-status-compatibility).
+Before upgrading from v0.2.x, finish or
 abort all sessions with the old version and remove its empty metadata file as described in the
 [upgrade instructions](docs/releases/v0.3.0.md#upgrading-from-v02x).
 
@@ -183,18 +185,21 @@ An empty message, unchanged template, or cancelled edit leaves the session open.
 
 ```bash
 relay agent status                         # JSON summary; no complete patches
+relay agent diff session                   # Session base → live workspace, approved or pending
 relay agent diff reviewed                  # Exact newly accepted hunks at the latest handoff
 relay agent diff human                     # Previous normal Agent Stop → latest pre-agent snapshot
 relay agent diff pending                   # Reviewed checkpoint → live workspace
 relay agent git log --oneline main          # Read-only history outside this session
 ```
 
-Every diff supports `--name-only` and literal path filters after `--`:
+Every diff (including saved btw diffs) supports `--name-only`, `--stat`, and literal path filters
+after `--`:
 
 ```bash
 relay agent diff reviewed --name-only
 relay agent diff human --name-only
 relay agent diff pending --name-only
+relay agent diff session --stat
 relay agent diff reviewed -- Parser.kt
 relay agent diff human -- Parser.kt Config.kt
 relay agent diff pending -- src/parser/
@@ -203,12 +208,51 @@ relay agent diff pending -- src/parser/
 Paths are relative to the command's current directory. Use `--name-only -z` for NUL-delimited names
 in scripts. Patches include binary changes. Renames appear as a deletion/addition so path-filtered
 views remain explicit. Inspection never changes the real index or working files.
+`--stat` and `--name-only` are alternative output formats. Empty diffs produce no output and exit 0;
+unsupported options fail with a nonzero exit code and an error on stderr.
 
-`reviewed` and `human` are fixed for the latest handoff, including after Agent Stop; `pending` stays
-live. Before the first handoff, the first two are empty. The human view includes direct edits **and
-discards**, since both change the workspace after the agent stops. It describes provenance, not
+`session` shows the current net changes by both the human and the agent since the immutable session
+base. It includes approved changes and pending proposals, including new project files; reverted
+changes cancel out. Sealing approvals does not change this view. It is not an authorship report or
+an event history.
+
+`reviewed` and `human` are fixed for the latest handoff, including after Agent Stop; `session` and
+`pending` stay live. Before the first handoff, reviewed/human are empty. The human view includes
+direct edits **and discards**, since both change the workspace after the agent stops. It describes provenance, not
 ownership or an instruction to preserve those lines verbatim. Before the next handoff, staged
 approvals are still part of the delta against the previous reviewed checkpoint.
+
+Normal-turn hooks announce approvals only when changes were sealed at that handoff, listing the
+affected paths separately from human edits. Only the approved hunks leave `pending`; a partially
+approved file can appear in both `reviewed` and `pending`.
+
+`relay agent status` focuses on decisions the agent can make:
+
+```json
+{
+  "active": true,
+  "phase": "agent",
+  "turn": 2,
+  "turn_kind": "normal",
+  "session_changes": true,
+  "pending_changes": false,
+  "provenance": {"available": true, "newly_reviewed": true, "human_edits": false},
+  "btw_recoveries": []
+}
+```
+
+`phase` is `human` or `agent`; `turn`/`turn_kind` describe the current or latest turn (`normal` or
+read-only `btw`, initially `0`/`null`). `session_changes` and `pending_changes` correspond to the
+two live diffs; all changes being approved can leave the former true and the latter false.
+`provenance` describes the latest turn entry, stays fixed during the turn, and is unavailable before
+the first handoff. Its flags indicate whether the reviewed/human diffs contain changes, including
+human edits visible during btw. `btw_recoveries` lists saved changes with their inspection/retrieval
+commands. Without an active session, the agent receives only `{"active": false}`.
+
+The agent summary omits session IDs, commit hashes, origin, commit messages, next-turn controls,
+index/staging details, and static command lists. Human diagnostics remain available through
+`relay status --json`; consumers needing those fields should use that command. Inspection syntax
+is provided by the hook and `relay agent diff --help`.
 
 For changes outside the current session, use `relay agent git <subcommand> <args...>`.
 It forwards supported read-only Git queries with the original arguments, stdin/stdout/stderr,
@@ -241,8 +285,9 @@ The immutable base is now `C`. Send this prompt in Kiro:
 > Refactor the parser and move token configuration into the new config model.
 
 The Prompt Submit hook teaches the agent Relay's protocol, including `relay agent status` and the
-`reviewed`, `human`, and `pending` diffs. The agent changes `Parser.kt`, `Token.kt`, `Config.kt`, and
-`README.md`. Agent Stop snapshots its output; all four files are pending in your usual Git UI.
+`session`, `reviewed`, `human`, and `pending` diffs. The agent changes `Parser.kt`, `Token.kt`,
+`Config.kt`, and `README.md`. Agent Stop snapshots its output; all four files are pending in your
+usual Git UI.
 
 Review the files:
 
@@ -275,6 +320,8 @@ Send the next prompt:
 Prompt Submit seals `Token.kt` and the selected parser hunks into the reviewed checkpoint. The
 index becomes clean; the remaining parser and configuration changes stay pending. Relay snapshots
 pre-agent code, records the newly reviewed patch and human changes, and injects the protocol again.
+The hook lists `Parser.kt`/`Token.kt` as containing newly approved changes and `Parser.kt`/`README.md`
+as human-edited paths.
 
 The agent can first get a file overview:
 
@@ -285,6 +332,8 @@ relay agent diff human --name-only
 # Parser.kt, README.md (the discard is also a human workspace change)
 relay agent diff pending --name-only
 # Config.kt, Parser.kt
+relay agent diff session --name-only
+# Config.kt, Parser.kt, Token.kt (all current changes, including approvals)
 ```
 
 Then it can read exact hunks only where useful:

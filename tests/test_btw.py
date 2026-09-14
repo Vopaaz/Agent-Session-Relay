@@ -36,6 +36,7 @@ class BtwTests(RepositoryTest):
             timestamps = {p: (self.repo / p).stat().st_mtime_ns for p in ("Token.kt", "Config.kt")}
             injection = self.hook("prompt-submit").stdout
             self.assertIn("BTW turn", injection)
+            self.assertNotIn("Approvals are sealed", injection)
             self.assertNotIn("Human changes (", injection)
             self.assertNotIn("Token.kt", injection)
             self.assertEqual(self.state()["turn_kind"], "btw")
@@ -43,6 +44,11 @@ class BtwTests(RepositoryTest):
             self.assertEqual(self.state()["reviewed_checkpoint"], reviewed)
             self.assertEqual(self.git("rev-parse", "HEAD").strip(), reviewed)
             self.assertEqual(self.names("reviewed"), set())
+            status = json.loads(self.run_relay("agent", "status").stdout)
+            self.assertEqual(status["turn_kind"], "btw")
+            self.assertFalse(status["provenance"]["newly_reviewed"])
+            self.assertTrue(status["provenance"]["human_edits"])
+            self.assertEqual(self.names("session"), {"Parser.kt", "Token.kt", "Config.kt"})
             self.assertEqual(self.names("human"), {"Parser.kt", "Token.kt", "Config.kt"})
             self.assertIn("+human direction", self.run_relay("agent", "diff", "human").stdout)
             self.assertEqual(self.hook("prompt-submit").stdout, injection)
@@ -93,6 +99,9 @@ class BtwTests(RepositoryTest):
         self.assertEqual(recovery["turn"], 2)
         self.assertTrue(recovery["workspace_changes"])
         self.assertTrue(recovery["index_changes"])
+        agent_recovery = json.loads(self.run_relay("agent", "status").stdout)["btw_recoveries"][0]
+        self.assertEqual(agent_recovery, recovery)
+        self.assertIn("relay agent restore-btw 2", agent_recovery["restore"])
         self.git("gc", "--prune=now")
         saved = self.run_relay("agent", "diff", "btw", "--turn", "2").stdout
         self.assertIn("-human direction", saved)
@@ -100,6 +109,13 @@ class BtwTests(RepositoryTest):
         self.assertIn("GIT binary patch", saved)
         self.assertIn("new file mode 100755", saved)
         self.assertIn("new file mode 120000", saved)
+        for options, path in (((), "Token.kt"), (("--staged",), "Parser.kt")):
+            stat = self.run_relay(
+                "agent", "diff", "btw", "--turn", "2", *options, "--stat", "--", path,
+            ).stdout
+            self.assertIn(path, stat)
+            self.assertIn("1 file changed", stat)
+            self.assertNotIn("diff --git", stat)
         self.assertIn("+staged-only btw work", self.run_relay(
             "agent", "diff", "btw", "--turn", "2", "--staged",
         ).stdout)

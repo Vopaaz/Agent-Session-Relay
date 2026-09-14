@@ -2,8 +2,8 @@
 
 import json
 
-NORMAL = """Staged approvals have been sealed into the reviewed checkpoint.
-Other changes remain pending. Reviewed code and human edits/discards are soft
+NORMAL = """The reviewed checkpoint contains previously accepted changes.
+Changes relative to that checkpoint remain pending. Reviewed code and human edits are soft
 guidance; you may revise them. Leave your changes unstaged for human review.
 """
 
@@ -15,10 +15,11 @@ Do not switch modes yourself.
 
 INSPECTION = """Do not run Git directly. Leave session and turn-mode control to the human. Use:
   relay agent status          # mode, review state
+  relay agent diff session    # session base to live workspace, approved or pending
   relay agent diff reviewed   # approvals sealed this turn
-  relay agent diff human      # human edits/discards, fixed at turn start
+  relay agent diff human      # human edits, fixed at turn start
   relay agent diff pending    # reviewed checkpoint to live workspace
-Diffs support --name-only and -- <paths...>; filter paths are relative to cwd.
+Diffs support --name-only, --stat, and -- <paths...>; paths are relative to cwd.
 
 Use `relay agent git <args...>`, if necessary, for read-only inspection outside this session.
 Prefer `relay agent diff` for current-session changes.
@@ -36,6 +37,14 @@ def protocol(context: dict) -> str:
     )
     result += BTW if context["kind"] == "btw" else NORMAL
     result += "\n" + INSPECTION
+    if context["kind"] == "normal" and context["reviewed_paths"]:
+        result += (
+            "\nApprovals are sealed into the reviewed checkpoint this turn.\n"
+            "Approved hunks are excluded from `diff pending`, but the rest of the file "
+            "they are in may still contain pending changes.\n"
+            "Approved changes (repository-relative paths, JSON):\n"
+        )
+        result += json.dumps(context["reviewed_paths"], ensure_ascii=True) + "\n"
     if context["kind"] == "normal" and context["human_paths"]:
         result += "\nHuman changes (repository-relative paths, JSON):\n"
         result += json.dumps(context["human_paths"], ensure_ascii=True) + "\n"

@@ -254,6 +254,10 @@ Relay 保存足够的信息，使 Agent 后续可以通过 Relay 查询：
 * 各类 patch 涉及的文件列表。
 
 普通 turn 存在 human 改动时，必须自动注入完整的 human 文件列表，并明确说明有人类修改。
+仅当本次 handoff 确实封存了审批时，额外通知并列出 newly reviewed 的完整路径列表。
+路径列表不表示整个文件均已认可；只有被认可的 hunks 离开 pending。通知依据本轮保存的
+reviewed_from/reviewed_to，而不是封存后通常已为 false 的 staged_approvals。重复 hook 保持相同内容。
+Human workspace 变化统一称 edits，不暗示存在独立的 discard/rejection 状态。
 完整 patches 仍由 Agent 按需通过 `relay agent ...` 查询，不默认注入。
 
 ### 4. Inject Relay protocol
@@ -330,16 +334,21 @@ before making further changes.
 
 提供 Agent-readable 的 session summary。
 
-它应概览：
+它只概览对 Agent 判断当前状态有用的信息：
 
-* 当前 Relay session；
-* 当前 lifecycle state；
-* reviewed checkpoint；
-* 是否存在 pending changes；
-* 是否存在本轮相关 human/review provenance；
-* Agent 可用的 Relay inspection commands。
+* `active`：是否存在 active session；
+* `phase`、`turn`、`turn_kind`：当前阶段、当前或最近轮次及 normal/btw 模式；
+* `session_changes`：相对 immutable base 是否存在当前净变化；
+* `pending_changes`：相对 reviewed checkpoint 是否存在当前变化；
+* `provenance`：最近 turn 入口是否可用，以及 newly_reviewed/human_edits 信号；
+* `btw_recoveries`：保存的 btw 改动及其查询/取回入口。
 
-它不需要默认输出完整 patch。
+没有 active session 时只返回 `{"active": false}`。第一次 handoff 前，turn 为 0、turn_kind 为 null，
+provenance.available/newly_reviewed/human_edits 均为 false。Provenance 在轮内固定，session/pending 实时更新。
+
+Agent 输出不包含 session ID、origin、commit hash、提交说明、下一轮控制信息、index/staging 细节、
+静态命令与参数列表。完整的人类诊断信息保留在 `relay status --json` 中；命令用法由 hook 与 help 提供。
+不默认输出完整 patch。
 
 ---
 
@@ -383,6 +392,14 @@ relay agent diff human --name-only
 
 ---
 
+## `relay agent diff session`
+
+显示 immutable `base_commit` → 当前完整 workspace 的净变化，包含人类与 Agent 的共同修改，
+无论是否已经认可。它不是个人贡献统计或操作历史；还原到起点的改动会抵消。
+封存审批不改变该视图。复用现有 workspace 快照语义，包含新增项目文件；normal/btw 均可查询。
+
+---
+
 ## `relay agent diff pending`
 
 显示：
@@ -398,6 +415,9 @@ relay agent diff pending --name-only
 ```
 
 ---
+
+所有 diff commands（包括 btw）都应支持 `--stat` 统计或 `--name-only` 文件列表，二者互斥；
+`--name-only -z` 提供 NUL 分隔输出。空 diff 保持空输出并成功退出；不支持的参数必须非零退出并在 stderr 报错。
 
 所有 diff commands 都应支持 path filtering，例如：
 

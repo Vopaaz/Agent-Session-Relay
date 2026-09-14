@@ -35,13 +35,15 @@ class DistributionTests(RepositoryTest):
 
     def test_standalone_archive_runs_a_complete_session(self):
         self.packed("start", "-m", "Update standalone token handling")
-        status = json.loads(self.packed("agent", "status").stdout)
+        status = json.loads(self.packed("status", "--json").stdout)
+        self.assertFalse(json.loads(self.packed("agent", "status").stdout)["session_changes"])
         self.packed("kiro", "hook", "prompt-submit", input="{}")
         self.write("Token.kt", "standalone proposal")
         self.packed("kiro", "hook", "agent-stop", input="{}")
         self.assertEqual(
             self.packed("agent", "diff", "pending", "--name-only").stdout, "Token.kt\n"
         )
+        self.assertIn("1 file changed", self.packed("agent", "diff", "session", "--stat").stdout)
         self.packed("finish", ok=False)
         self.git("add", "Token.kt")
         self.packed("message", "-m", "Refine standalone token handling")

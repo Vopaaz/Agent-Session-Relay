@@ -32,7 +32,7 @@ scopes) is idempotent while a turn is open; it cannot reseal approvals or erase 
 
 | Entrypoint | Input | Output while active |
 | --- | --- | --- |
-| `relay kiro hook prompt-submit` | Optional JSON `cwd`, `session_id` | Mode-specific protocol; normal turns also include any human-changed file names; exit 2 on error |
+| `relay kiro hook prompt-submit` | Optional JSON `cwd`, `session_id` | Mode-specific protocol; normal turns also include any newly approved and human-changed paths; exit 2 on error |
 | `relay kiro hook agent-stop` | Optional JSON `cwd`, `session_id` | Usually silent; btw restoration notice and retrieval commands when needed; exit 2 on error |
 | `relay kiro hook pre-tool-use` | JSON `tool_name` and `tool_input` | Silent success, or guidance on stderr with exit 2 to block |
 
@@ -41,9 +41,15 @@ when a launcher does not use the workspace as the process directory. Changing a 
 working-directory argument does not disable the current workspace's guard. Prompts and tool inputs
 are not written into Relay metadata. A `session_id` identifies ownership of an open agent turn.
 
-Normal prompts include the complete human-changed file list as a JSON array of repository-relative
-paths; no patch is injected. JSON escaping keeps unusual filenames on a single data line. Btw prompts
-omit this list, while `relay agent diff human` still exposes the accumulated changes at btw entry.
+Normal prompts announce approvals only when they were sealed at that handoff. The notice lists
+paths from `diff reviewed` and explains that the files may still contain pending hunks. Approvals
+and human edits have separate complete JSON arrays of repository-relative paths, each omitted when
+empty; no patch is injected. JSON escaping keeps unusual filenames on a single data line. Repeated
+hooks for an open turn reproduce its original notice and lists. Btw prompts omit both lists, while
+`relay agent diff human` still exposes the accumulated changes at btw entry.
+The protocol explains the live `session`/`pending` views, fixed `reviewed`/`human` views, and
+`--name-only`/`--stat`/path filtering. It calls human workspace changes "edits", without implying
+a separately tracked discard/rejection state.
 Mode selection comes from `relay btw`, not from interpreting the user's natural-language prompt.
 
 When inactive or suspended, all three entrypoints return 0, emit nothing, and create no state files,
@@ -87,8 +93,10 @@ with real Git, but do not launch or impersonate a real Kiro agent service.
    is rejected by the command without creating a branch.
 5. Stage one hunk in your normal Git UI, edit another hunk manually, and send a second prompt. Verify
    staged approvals are sealed, `diff reviewed` shows that exact hunk, `diff human` shows the manual
-   edit, and `diff pending` shows the unresolved remainder. The hook must list human-changed paths,
-   without including their patch contents.
+   edit, and `diff pending` shows the unresolved remainder. The hook must list newly approved and
+   human-changed paths separately, without their patch contents. `diff session --stat` must still
+   include the approved work. On a later approval-only handoff, only the approval list appears;
+   on a handoff without approvals, there is no approval notice.
 6. After Agent Stop, stage one hunk and manually edit another. Run `relay btw`, then ask a code
    question. Verify no human file list is injected, human diff is still queryable, known writes are
    blocked, and staging survives Stop. Send a normal prompt and verify the full human list returns.

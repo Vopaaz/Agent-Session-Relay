@@ -337,6 +337,7 @@ class Git:
         *,
         name_only: bool = False,
         null: bool = False,
+        stat: bool = False,
     ) -> bytes:
         filters = []
         for name in paths:
@@ -355,7 +356,12 @@ class Git:
             "--src-prefix=a/",
             "--dst-prefix=b/",
         ]
-        args += ["--name-only"] if name_only else ["--binary", "--full-index"]
+        if name_only:
+            args.append("--name-only")
+        elif stat:
+            args.append("--stat")
+        else:
+            args += ["--binary", "--full-index"]
         if null:
             args.append("-z")
         return self.run(*args, left, right, "--", *filters).stdout
