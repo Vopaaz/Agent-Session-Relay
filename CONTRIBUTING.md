@@ -48,8 +48,9 @@ project. The tool guard is a workflow aid, not a security boundary against arbit
 ## Releases
 
 The package version has one source of truth: `src/agent_session_relay/__init__.py`. Update it and
-write `docs/releases/v<version>.md` with the changes and any upgrade steps. Then prepare and
-validate both PyPI distributions without uploading anything:
+write `docs/releases/v<version>.md` with the changes and any upgrade steps. Keep published release
+notes as a record of that version; document later behavior and compatibility changes in the new
+release notes. Then prepare and validate both PyPI distributions without uploading anything:
 
 ```bash
 python3 -m venv .venv

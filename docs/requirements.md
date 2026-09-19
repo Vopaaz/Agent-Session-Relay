@@ -256,7 +256,7 @@ Relay 保存足够的信息，使 Agent 后续可以通过 Relay 查询：
 普通 turn 存在 human 改动时，必须自动注入完整的 human 文件列表，并明确说明有人类修改。
 仅当本次 handoff 确实封存了审批时，额外通知并列出 newly reviewed 的完整路径列表。
 路径列表不表示整个文件均已认可；只有被认可的 hunks 离开 pending。通知依据本轮保存的
-reviewed_from/reviewed_to，而不是封存后通常已为 false 的 staged_approvals。重复 hook 保持相同内容。
+reviewed_from/reviewed_to，而不是封存后通常已为 false 的 staged_approvals。重复或续接 hook 保留原基线，改为注入续接说明，不重复宣布原来的审批和人类修改列表。
 Human workspace 变化统一称 edits，不暗示存在独立的 discard/rejection 状态。
 完整 patches 仍由 Agent 按需通过 `relay agent ...` 查询，不默认注入。
 
@@ -340,8 +340,7 @@ before making further changes.
 * `phase`、`turn`、`turn_kind`：当前阶段、当前或最近轮次及 normal/btw 模式；
 * `session_changes`：相对 immutable base 是否存在当前净变化；
 * `pending_changes`：相对 reviewed checkpoint 是否存在当前变化；
-* `provenance`：最近 turn 入口是否可用，以及 newly_reviewed/human_edits 信号；
-* `btw_recoveries`：保存的 btw 改动及其查询/取回入口。
+* `provenance`：最近 turn 入口是否可用，以及 newly_reviewed/human_edits 信号。
 
 没有 active session 时只返回 `{"active": false}`。第一次 handoff 前，turn 为 0、turn_kind 为 null，
 provenance.available/newly_reviewed/human_edits 均为 false。Provenance 在轮内固定，session/pending 实时更新。
@@ -416,7 +415,7 @@ relay agent diff pending --name-only
 
 ---
 
-所有 diff commands（包括 btw）都应支持 `--stat` 统计或 `--name-only` 文件列表，二者互斥；
+所有语义 diff commands 都应支持 `--stat` 统计或 `--name-only` 文件列表，二者互斥；
 `--name-only -z` 提供 NUL 分隔输出。空 diff 保持空输出并成功退出；不支持的参数必须非零退出并在 stderr 报错。
 
 所有 diff commands 都应支持 path filtering，例如：
@@ -531,6 +530,19 @@ Relay 不阻止这种修改。
 3. 保持 Agent 新产生的修改作为正常 unstaged/pending Git changes。
 
 用户随后继续通过标准 Git UI review。
+
+若 Agent 被人类手动中断且 Stop 未执行，同一会话再次提交 prompt 续接原 turn；不新增轮次、
+不封存审批、不重置 workspace/index，不改变 reviewed/human diff 的原入口基线。
+注入词说明现有 turn 仍未关闭、可能曾被强制中断，且未发生新的 human-to-agent handoff。
+重复 hook 同样使用续接词；不能据此断定用户确实取消了 Agent。不同的已知会话 owner 仍被拒绝。
+
+人工编辑、stage 或 discard 之前，人类可执行 `relay end-interrupted-agent-turn` 补记结束边界。
+该命令复用对应模式的 Agent Stop 保存与收尾事务；要求存在 active session 且 phase=agent，
+无 active session、suspended、human 阶段及成功后的重复调用均须拒绝且不修改现场。
+命令不终止 Agent 进程，也不自动检测中断；调用者须先确保 Agent 及其写入工具已停止。
+Agent 不得自行调用，由现有 human-only lifecycle guard 拦截。
+自动 Stop hook 的重复投递仍是静默 no-op；人工补记后，新的人工修改在下一次 prompt 正常交接。
+失败复用现有事务回滚与 recover，不增加持久化的中断状态，不追溯猜测缺失边界之前的来源。
 
 ---
 
@@ -1201,10 +1213,12 @@ Stop 无变化时不重写工作区或 index；有变化时先保存 workspace �
 只恢复已捕获的项目范围，不承诺恢复无关 ignored 文件或外部副作用。失败处理复用既有事务机制，
 以正常工作和代码可维护性优先，不为极小概率场景增加大量防御逻辑。
 
-`relay agent diff btw --turn N [--staged]` 查看保存的 workspace 或 index delta。
-`relay agent restore-btw N [--staged]` 仅能在普通 agent turn、handoff 之后取回，修改保持 unstaged，
-不把取回内容误算为人类修改。无法应用时不覆盖当前代码，交由 Agent 查看并适配 patch。
-恢复记录全部属于 session，suspend/resume 保留，finish/abort 统一清理，不增加长期恢复分支。
+Btw 仅提供进入和取消两个操作：`relay btw`、`relay btw --cancel`。
+意外写入紧急保存后立即排除在 Relay 的 mental model 之外，不登记为 turn output 或恢复记录，
+不进入语义 diff、status 或后续 handoff，也不提供专用查询或取回命令。
+Agent 需要时可通过通用只读入口 `relay agent git` 查看底层快照。
+紧急快照仅作为 session namespace 下的 Git refs 保存，suspend/resume 保留，finish/abort 统一清理，
+不增加长期恢复分支。
 
 不提供跨版本活动 session 的 backward compatibility，不编写旧格式迁移或兼容读取。
 注入词使用不继承开发对话上下文的子代理评估和精简，迭代不超过 5 轮。

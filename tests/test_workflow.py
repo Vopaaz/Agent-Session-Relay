@@ -62,7 +62,11 @@ class WorkflowTests(RepositoryTest):
         self.assertNotIn("+accepted parser hunk", pending)
         self.assertIn("+human direction", pending)
         # Duplicate hook execution must not erase the accepted-hunk/human provenance.
-        self.assertEqual(self.hook("prompt-submit").stdout, injection)
+        continued = self.hook("prompt-submit").stdout
+        self.assertIn("No new human-to-agent handoff has occurred", continued)
+        self.assertNotIn("Human changes (", continued)
+        self.assertNotIn("Approved changes (", continued)
+        self.assertEqual(self.hook("prompt-submit").stdout, continued)
         self.assertEqual(self.state()["turn"], 2)
         self.assertEqual(self.run_relay("agent", "diff", "human", "--", "Parser.kt").stdout, human)
         self.write("Token.kt", "ParsedToken refactored again\n")

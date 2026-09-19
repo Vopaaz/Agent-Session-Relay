@@ -115,6 +115,7 @@ See [integration details and a live smoke test](https://github.com/Vopaaz/Agent-
 | `relay start [-m "message"]` | Start from a completely clean, stable Git workspace, optionally describing the work |
 | `relay message [session] [-m "message"]` | Set the session message; omit `-m` to open the Git editor |
 | `relay status` | Show the session message, lifecycle, reviewed checkpoint, staged approvals, and remaining proposals |
+| `relay end-interrupted-agent-turn` | After manually interrupting the agent, close its open turn before human review |
 | `relay btw [--cancel]` | Make the next prompt a read-only aside; `--cancel` cancels the unconsumed selection |
 | `relay suspend` | Save full staging/workspace state and return to the origin branch |
 | `relay resume [session]` | Restore the only suspended session, or a selected ID/prefix |
@@ -129,6 +130,30 @@ Starting rejects staged changes, unstaged changes, non-ignored untracked files, 
 conflicts, and unfinished merge/rebase/cherry-pick/revert/bisect operations. An initial commit is
 required. While active, use Git for staging and discarding; suspend before switching branches,
 committing, stashing, or rewriting history.
+
+## After manually interrupting the agent
+
+If Stop did not run, submitting another prompt in the same Kiro conversation continues the open
+Relay turn. The hook explains that no new human-to-agent handoff occurred. The turn number, review
+baselines, workspace, and index stay intact; old approval/human file lists are not announced again.
+Repeated hook delivery uses the same continuation notice and preserves the same state.
+
+Before editing, staging, or discarding anything yourself, ensure the agent and its tools have stopped,
+then run:
+
+```bash
+relay end-interrupted-agent-turn
+```
+
+This human-only command performs the existing Agent Stop cleanup and enters the human phase.
+For a normal turn, it snapshots the partial output, preserves working files, and leaves proposals
+unstaged. It does not stop the agent process or detect whether cancellation actually occurred.
+It rejects inactive/suspended sessions and the human phase, including a second invocation after
+success or after the normal Stop hook already completed. Check `relay status` if unsure.
+The next prompt then captures your subsequent edits and approvals as a new handoff.
+
+The command cannot reconstruct human edits made before that boundary. `relay recover` handles an
+interrupted Relay transaction, not a missing Agent Stop.
 
 ## Ask a side question with btw
 
@@ -148,21 +173,16 @@ If writes get through, Stop saves the output, then restores the entry workspace 
 Unchanged files are not rewritten. This covers captured project files, not unrelated ignored files
 or effects outside the repository; it is not an execution sandbox.
 
-`relay status` and the Stop notice identify saved btw turns. For example, for turn 2:
+The only btw commands are `relay btw` and `relay btw --cancel`. Emergency snapshots are excluded
+from Relay's review state, semantic diffs, status, and subsequent handoffs. If needed, inspect the
+underlying snapshots through `relay agent git`. Suspend/resume preserves these Git objects and any
+pending btw selection; finish/abort deletes them with the session.
 
-```bash
-relay agent diff btw --turn 2                 # Saved workspace delta
-relay agent diff btw --turn 2 --staged        # Saved index delta, including staged-only content
-relay agent restore-btw 2                     # Apply the workspace delta during a NORMAL agent turn
-```
-
-Retrieval is allowed only after a normal handoff, so retrieved changes keep agent provenance and
-remain unstaged. Add `--staged` to retrieve the saved index delta as unstaged workspace changes instead.
-If a patch conflicts with current work, retrieval leaves it untouched; the agent can inspect and
-adapt the saved patch. Saved btw records remain in this session and are deleted by finish/abort.
-Suspend/resume preserves them and any pending btw selection. Versions 0.3.0, 0.4.0, and 0.5.0 share
-schema 2, so existing v0.3.0/v0.4.0 sessions need no migration. For the agent status response change,
-see the [v0.5.0 release notes](docs/releases/v0.5.0.md#agent-status-compatibility).
+Versions 0.3.0 through 0.6.0 share schema 2, so existing v0.3.0–v0.5.0 sessions need no migration.
+For the removed btw commands and status fields,
+see the [v0.6.0 release notes](docs/releases/v0.6.0.md#compatibility-and-upgrading).
+The earlier agent status changes are documented in the
+[v0.5.0 release notes](docs/releases/v0.5.0.md#agent-status-compatibility).
 Before upgrading from v0.2.x, finish or
 abort all sessions with the old version and remove its empty metadata file as described in the
 [upgrade instructions](docs/releases/v0.3.0.md#upgrading-from-v02x).
@@ -192,8 +212,7 @@ relay agent diff pending                   # Reviewed checkpoint → live worksp
 relay agent git log --oneline main          # Read-only history outside this session
 ```
 
-Every diff (including saved btw diffs) supports `--name-only`, `--stat`, and literal path filters
-after `--`:
+Every semantic diff supports `--name-only`, `--stat`, and literal path filters after `--`:
 
 ```bash
 relay agent diff reviewed --name-only
@@ -236,8 +255,7 @@ approved file can appear in both `reviewed` and `pending`.
   "turn_kind": "normal",
   "session_changes": true,
   "pending_changes": false,
-  "provenance": {"available": true, "newly_reviewed": true, "human_edits": false},
-  "btw_recoveries": []
+  "provenance": {"available": true, "newly_reviewed": true, "human_edits": false}
 }
 ```
 
@@ -246,8 +264,7 @@ read-only `btw`, initially `0`/`null`). `session_changes` and `pending_changes` 
 two live diffs; all changes being approved can leave the former true and the latter false.
 `provenance` describes the latest turn entry, stays fixed during the turn, and is unavailable before
 the first handoff. Its flags indicate whether the reviewed/human diffs contain changes, including
-human edits visible during btw. `btw_recoveries` lists saved changes with their inspection/retrieval
-commands. Without an active session, the agent receives only `{"active": false}`.
+human edits visible during btw. Without an active session, the agent receives only `{"active": false}`.
 
 The agent summary omits session IDs, commit hashes, origin, commit messages, next-turn controls,
 index/staging details, and static command lists. Human diagnostics remain available through

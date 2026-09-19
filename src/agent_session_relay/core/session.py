@@ -198,10 +198,10 @@ class Relay:
             session and session["phase"] == "agent" and session["turns"][-1]["kind"] == "btw"
         )
 
-    def handoff_context(self, session: dict) -> dict:
+    def handoff_context(self, session: dict, *, continuing: bool = False) -> dict:
         turn = session["turns"][-1]
         human_names = reviewed_names = b""
-        if turn["kind"] == "normal":
+        if turn["kind"] == "normal" and not continuing:
             human_names = self.git.diff(
                 turn["human_from"], turn["pre"], [], name_only=True, null=True
             )
@@ -210,6 +210,7 @@ class Relay:
             )
         return {
             "kind": turn["kind"],
+            "continuing": continuing,
             "human_paths": [os.fsdecode(name) for name in human_names.split(b"\0") if name],
             "reviewed_paths": [os.fsdecode(name) for name in reviewed_names.split(b"\0") if name],
         }
@@ -233,7 +234,7 @@ class Relay:
                         "Wait for its Agent Stop hook before starting a new turn."
                     )
                 # Prompt retries / hooks installed at both scopes must not erase provenance.
-                return self.handoff_context(session)
+                return self.handoff_context(session, continuing=True)
             workspace = self.workspace_tree(session)
             approved = self.git.index_tree()
             previous_reviewed = session["reviewed"]
@@ -262,8 +263,6 @@ class Relay:
                         "pre": pre,
                         "post": None,
                         "pre_index": self.save_index(session, label) if kind == "btw" else None,
-                        "post_index": None,
-                        "recovery": None,
                     }
                 )
                 session["phase"] = "agent"
@@ -271,87 +270,66 @@ class Relay:
                 self.store.save(state)
             return self.handoff_context(session)
 
-    def stop(self, owner: str | None = None) -> dict | None:
-        if not self.active(self.store.load(), required=False):
+    def stop(
+        self, owner: str | None = None, *, require_open: bool = False,
+    ) -> dict[str, str] | None:
+        """Close a turn; an explicit human request requires an open active turn."""
+        if require_open:
+            self.store.assert_ready()
+        if not self.active(self.store.load(), required=require_open):
             return None
         with self.store.lock():
             self.store.assert_ready()
             state = self.store.load()
-            session = self.active(state, required=False)
+            session = self.active(state, required=require_open)
             if not session:
                 return None
             self.validate(session)
             if session["phase"] != "agent":
+                if require_open:
+                    raise RelayError(
+                        "No agent turn is in progress; Relay is already in the human phase."
+                    )
                 return None
             turn = session["turns"][-1]
             if owner and turn.get("owner") and owner != turn["owner"]:
                 raise RelayError("This Agent Stop belongs to a different Kiro conversation.")
             workspace = self.workspace_tree(session)
+            snapshots = None
             with self.store.transaction(state, session["id"], "agent-stop", workspace):
-                post = self.snapshot(session, f"turn-{session['turn']:06d}-post", workspace)
-                turn.update({"post": post, "stopped_at": now()})
+                turn["stopped_at"] = now()
                 if turn["kind"] == "btw":
-                    self.stop_btw(session, turn, workspace)
+                    snapshots = self.stop_btw(session, turn, workspace)
                 else:
+                    post = self.snapshot(session, f"turn-{session['turn']:06d}-post", workspace)
+                    turn["post"] = post
                     session["last_post"] = post
                     # Agent output remains a proposal, including anything it staged.
                     self.git.run("read-tree", session["reviewed"])
                 session["phase"] = "human"
                 self.store.save(state)
-            return {"turn": turn["number"], **turn["recovery"]} if turn["recovery"] else None
+            return snapshots
 
-    def stop_btw(self, session: dict, turn: dict, workspace: str) -> None:
+    def stop_btw(self, session: dict, turn: dict, workspace: str) -> dict[str, str] | None:
         original_index = self.git.run("cat-file", "blob", turn["pre_index"]).stdout
         workspace_changed = workspace != self.git.tree(turn["pre"])
         index_changed = self.git.normalized_index() != original_index
         if not workspace_changed and not index_changed:
-            return
+            return None
         # Save the unexpected output before touching the worktree or index. The surrounding
         # transaction already restores the before-Stop state if this operation fails.
-        turn["post_index"] = self.save_index(session, f"turn-{turn['number']:06d}-post")
-        turn["recovery"] = {"workspace_changes": workspace_changed, "index_changes": index_changed}
+        # These refs are emergency backups only, never turn output or review state.
+        label = f"turn-{turn['number']:06d}-post"
+        post = self.snapshot(session, label, workspace)
+        self.save_index(session, label)
+        snapshots = {"workspace": post} if workspace_changed else {}
+        if index_changed:
+            snapshots["staging"] = self.git.resolve(self.prefix(session) + label + "-staged")
         if workspace_changed:
             self.git.materialize(workspace, self.git.tree(turn["pre"]))
         self.git.restore_index(original_index)
-
-    @staticmethod
-    def btw_recovery(session: dict, number: int | None) -> dict:
-        for turn in session["turns"]:
-            if turn["number"] == number and turn["recovery"]:
-                return turn
-        raise RelayError("No saved btw changes for that turn. List them with `relay agent status`.")
-
-    def recovery_trees(self, session: dict, turn: dict, *, staged: bool) -> tuple[str, str]:
-        if staged:
-            prefix = self.prefix(session) + f"turn-{turn['number']:06d}"
-            return prefix + "-pre-staged", prefix + "-post-staged"
-        return turn["pre"], turn["post"]
-
-    def restore_btw(self, number: int, *, staged: bool = False) -> None:
-        with self.store.lock():
-            self.store.assert_ready()
-            state = self.store.load()
-            session = self.active(state)
-            self.validate(session)
-            if session["phase"] != "agent" or session["turns"][-1]["kind"] != "normal":
-                raise RelayError("Restore btw changes during a normal agent turn, after handoff.")
-            turn = self.btw_recovery(session, number)
-            left, right = self.recovery_trees(session, turn, staged=staged)
-            patch = self.git.diff(left, right, [])
-            if not patch:
-                raise RelayError("No saved changes in this view; use --staged for index changes.")
-            result = self.git.run(
-                "apply", "--check", "--whitespace=nowarn", data=patch, check=False
-            )
-            if result.returncode:
-                option = " --staged" if staged else ""
-                raise RelayError(
-                    "Saved btw changes do not apply to the current workspace. "
-                    f"Inspect `relay agent diff btw --turn {number}{option}` and adapt the changes."
-                )
-            workspace = self.workspace_tree(session)
-            with self.store.transaction(state, session["id"], "restore-btw", workspace):
-                self.git.run("apply", "--whitespace=nowarn", data=patch)
+        # IDs are returned only for the immediate Stop notice, never persisted in turn state.
+        return snapshots
 
     def suspend(self) -> tuple[dict, dict]:
         with self.store.lock():
@@ -549,14 +527,6 @@ class Relay:
                 "turn": session["turn"],
                 "turn_kind": turn["kind"] if turn else None,
                 "next_turn": session["next_turn"],
-                "btw_recoveries": [
-                    {
-                        "turn": t["number"], **t["recovery"],
-                        "inspect": f"relay agent diff btw --turn {t['number']} [--staged]",
-                        "restore": f"relay agent restore-btw {t['number']} [--staged]",
-                    }
-                    for t in session["turns"] if t["recovery"]
-                ],
                 "base_commit": session["base_commit"],
                 "origin": session["origin"],
                 "reviewed_checkpoint": session["reviewed"],
@@ -595,12 +565,12 @@ class Relay:
             return {"active": False}
         return {key: status[key] for key in (
             "active", "phase", "turn", "turn_kind", "session_changes", "pending_changes",
-            "provenance", "btw_recoveries",
+            "provenance",
         )}
 
     def diff(
         self, kind: str, paths: list[str], *, name_only: bool = False, null: bool = False,
-        stat: bool = False, number: int | None = None, staged: bool = False,
+        stat: bool = False,
     ) -> bytes:
         if not self.active(self.store.load(), required=False):
             raise RelayError("No active Relay session. Use `relay start` or `relay resume`.")
@@ -608,12 +578,7 @@ class Relay:
             self.store.assert_ready()
             session = self.active(self.store.load())
             self.validate(session)
-            if kind == "btw":
-                turn = self.btw_recovery(session, number)
-                left, right = self.recovery_trees(session, turn, staged=staged)
-            elif number is not None or staged:
-                raise RelayError("--turn and --staged require `relay agent diff btw`.")
-            elif kind in ("session", "pending"):
+            if kind in ("session", "pending"):
                 left = session["base_commit"] if kind == "session" else session["reviewed"]
                 right = self.workspace_tree(session)
             elif session["turns"]:

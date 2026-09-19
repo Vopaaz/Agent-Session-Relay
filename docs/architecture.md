@@ -34,6 +34,22 @@ At a normal Agent Stop, save W as Qn and mark the phase `human`. Reset only the 
 output remains unreviewed even if a tool accidentally staged it. A duplicate Stop in the human phase
 does nothing, so it cannot erase approvals made after the first Stop.
 
+An additional Prompt Submit while the phase is already `agent` is a continuation, including
+repeated hook delivery. It does not create another turn, seal approvals, or change the original
+provenance. The returned context carries a transient `continuing` flag; the protocol explains that
+no new handoff occurred and omits the original approval/human path announcements. The saved
+reviewed/human diffs remain queryable. This does not distinguish an interrupted response from a
+hook retry, and no cancellation event is inferred or persisted. A different known conversation
+owner is still rejected.
+
+The human command `relay end-interrupted-agent-turn` closes an open turn after the user has stopped
+the agent and before human edits or staging begin. It calls the same mode-specific Stop transaction
+with `require_open=True`: inactive/suspended sessions and the human phase are errors. This check and
+the close occur under the same lock. Automatic Stop hooks remain silent no-ops after completion.
+The command does not stop a process or verify cancellation; it records the explicit human boundary.
+Normal turns preserve W and reset I to R; btw turns follow their existing save/restore behavior.
+Failures use the same rollback/recovery mechanism. No additional persistent interruption state is needed.
+
 ## One-turn btw
 
 `relay btw` sets `next_turn=btw`; `--cancel` resets it to `normal`. This changes only metadata, in
@@ -45,18 +61,20 @@ The btw human view is `last_normal_post → Pn`; its reviewed view is empty. Btw
 `last_post`, so human changes accumulate across any number of btw turns until a normal handoff.
 An initial btw uses B as the human baseline. Inspecting a diff never consumes it.
 
-At btw Stop, capture Qn and compare the workspace and normalized index with entry. If unchanged,
-only record completion. If changed, pin Qn and the post index, including staged-only blobs and
-intent-to-add, before restoring Pn and the pre index. Reuse the existing transaction journal for
-rollback and interruption recovery. The adapter reports restoration only after it succeeds.
+At btw Stop, compare the workspace and normalized index with entry. If unchanged, only record
+completion. If changed, pin emergency workspace and index snapshots, including staged-only blobs
+and intent-to-add, before restoring Pn and the pre index. Reuse the existing transaction journal for
+rollback and interruption recovery. After success, the adapter reports the snapshot commit IDs for
+workspace and/or staging changes and confirms restoration to the last human-to-agent handoff.
+These IDs are returned for that notice only, without persisting them in turn state.
 The main review baseline is unchanged in either case; the next prompt defaults to normal.
 
-Saved output is inspected with `relay agent diff btw --turn N`, or `--staged` for the index delta.
-`relay agent restore-btw N [--staged]` applies that delta to the current workspace only during an
-open normal agent turn. It checks applicability before applying and leaves I unchanged. Conflicts
-require inspecting/adapting the patch rather than overwriting later work. Both snapshots and recovery
-records belong to the session namespace; finish/abort removes them with the rest of the session.
-There is no extra recovery branch or permanent btw state.
+Emergency snapshots are Git refs only: they are never recorded as turn output or recovery metadata,
+and are excluded from semantic diffs, status, and subsequent handoffs. A completed btw turn keeps
+`post=null`; its effective workspace remains Pn. The only btw controls are `relay btw` and
+`relay btw --cancel`. Generic `relay agent git` queries can inspect the snapshots when needed.
+The snapshots belong to the session namespace, survive suspend/resume, and are removed by
+finish/abort with the rest of the session. There is no extra recovery branch or permanent btw state.
 
 ## Semantic inspection
 
@@ -66,18 +84,17 @@ There is no extra recovery branch or permanent btw state.
 | Reviewed | Rold → Rnew at the latest handoff |
 | Human | Latest normal Q → Pn at the latest turn entry |
 | Pending | R → live W |
-| Btw recovery | Saved btw Pn → Qn (or pre-index tree → post-index tree with `--staged`) |
 
 Partial-hunk approval is represented by Git's actual index tree, not a per-file label. Human
 provenance includes discards, reversions, additions, and deletions during the human interval. It
 cannot distinguish who typed the same bytes; turn boundaries provide the provenance assumption.
 
 Agent status projects the shared status snapshot into `active`, `phase`, `turn`, `turn_kind`,
-`session_changes` (W != B), `pending_changes` (W != R), `provenance`, and `btw_recoveries`.
+`session_changes` (W != B), `pending_changes` (W != R), and `provenance`.
 The provenance flags describe the latest turn entry, including human edits at btw entry; before
 the first handoff, `available` and both change flags are false. Without an active session the
 agent sees only `active: false`. Internal identities, human controls, index details, and static
-help are omitted. Saved btw inspection/retrieval commands remain actionable and are preserved.
+help are omitted.
 Human `relay status --json` retains full diagnostics, including unsealed approvals
 (`staged_approvals`, I != R) and `unstaged_changes` (W != I). The latter blocks finish when true;
 finish also requires a custom session message.
@@ -86,8 +103,9 @@ support patch output, `--name-only` (optionally `-z`), or `--stat`, with literal
 Empty output remains a successful empty diff; invalid options fail on stderr with a nonzero exit.
 
 Approval notifications are derived from the turn's Rold → Rnew paths, not from the live index:
-sealing resets I to R, so `staged_approvals` is normally false after an actual approval. Duplicate
-hooks repeat the same saved approval/human context. Btw seals nothing and emits neither path list.
+sealing resets I to R, so `staged_approvals` is normally false after an actual approval. Continuation
+hooks retain those comparisons without reannouncing their paths. Btw seals nothing and emits neither
+path list.
 An approved path may still contain pending hunks; notification wording does not imply file-level
 approval. No additional persistent event state is needed.
 
@@ -124,7 +142,8 @@ refs/relay/sessions/<id>/
   turn-000002-pre-index      Btw entry: expanded raw index blob
   turn-000002-pre-staged     Btw entry: staged-only object protection
   turn-000002-pre-intent-to-add
-  turn-000002-post-index     Present when btw changed workspace/index
+  turn-000002-post           Emergency workspace backup, only when btw changed workspace/index
+  turn-000002-post-index     Emergency index backup
   turn-000002-post-staged
   turn-000002-post-intent-to-add
   suspend-workspace         Full suspended W
@@ -141,9 +160,9 @@ refs/relay/transactions/<id>/
 ```
 
 Snapshot commits have B as their parent; checkpoint commits have the previous checkpoint as parent.
-Per-turn metadata retains pre/post and provenance commit IDs. Session IDs include UTC time and a
-random suffix, so multiple worktrees can share the object database/ref namespace without sharing an
-active session. Sessions in another worktree are managed from that worktree.
+Per-turn metadata retains entry/provenance commit IDs and normal-turn output commit IDs. Session IDs
+include UTC time and a random suffix, so multiple worktrees can share the object database/ref namespace
+without sharing an active session. Sessions in another worktree are managed from that worktree.
 State uses schema 2. There is no migration or compatibility reader for sessions from other versions.
 
 ## Suspend, resume, finish, abort

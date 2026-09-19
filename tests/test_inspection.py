@@ -121,7 +121,7 @@ class InspectionTests(RepositoryTest):
                 self.assertEqual(result.stdout, "")
                 self.assertTrue(result.stderr)
         for options in (("--turn", "1"), ("--staged",)):
-            self.assertIn("require `relay agent diff btw`", self.run_relay(
+            self.assertIn("unrecognized arguments", self.run_relay(
                 "agent", "diff", "session", *options, ok=False
             ).stderr)
 
@@ -133,7 +133,6 @@ class InspectionTests(RepositoryTest):
             "active": True, "phase": "human", "turn": 0, "turn_kind": None,
             "session_changes": False, "pending_changes": False,
             "provenance": {"available": False, "newly_reviewed": False, "human_edits": False},
-            "btw_recoveries": [],
         })
         self.hook("prompt-submit")
         token = self.read("Token.kt")
@@ -168,7 +167,7 @@ class InspectionTests(RepositoryTest):
         self.run_relay("suspend")
         self.assertEqual(self.agent_status(), {"active": False})
 
-    def test_approval_notice_is_conditional_partial_and_repeatable(self):
+    def test_approval_notice_is_conditional_partial_and_only_on_new_handoff(self):
         self.run_relay("start")
         first = self.hook("prompt-submit").stdout
         notice = "Approvals are sealed into the reviewed checkpoint this turn."
@@ -193,6 +192,10 @@ class InspectionTests(RepositoryTest):
         encoded = injection.split("Approved changes (repository-relative paths, JSON):\n")[1]
         self.assertEqual(json.loads(encoded), ["Parser.kt", unusual])
         self.assertEqual(self.names("pending"), {"Parser.kt"})
-        self.assertEqual(self.hook("prompt-submit").stdout, injection)
+        continued = self.hook("prompt-submit").stdout
+        self.assertIn("No new human-to-agent handoff has occurred", continued)
+        self.assertNotIn(notice, continued)
+        self.assertNotIn("Approved changes (", continued)
+        self.assertEqual(self.hook("prompt-submit").stdout, continued)
         self.hook("agent-stop")
         self.assertNotIn(notice, self.hook("prompt-submit").stdout)

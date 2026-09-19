@@ -112,6 +112,7 @@ context。** 普通 Kiro 对话中的 Git 使用不受影响。
 | `relay start [-m "message"]` | 从完全 clean、稳定的 Git 工作区开始，可选填写本次工作的说明 |
 | `relay message [session] [-m "message"]` | 设置 session 说明；省略 `-m` 则打开 Git 编辑器 |
 | `relay status` | 查看 session 说明、生命周期、reviewed checkpoint、staged approvals 和剩余 proposals |
+| `relay end-interrupted-agent-turn` | 手动中断 Agent 后，在人工 review 前结束尚未关闭的 agent turn |
 | `relay btw [--cancel]` | 将下一轮设为只读插问；`--cancel` 取消尚未消费的选择 |
 | `relay suspend` | 保存完整 staging/workspace 状态，返回原分支 |
 | `relay resume [session]` | 恢复唯一的 suspended session，或指定 ID/前缀 |
@@ -125,6 +126,26 @@ context。** 普通 Kiro 对话中的 Git 使用不受影响。
 Start 会拒绝 staged changes、unstaged changes、未忽略的 untracked files、未解决的 index conflicts，
 以及尚未完成的 merge/rebase/cherry-pick/revert/bisect 等操作。仓库需要已有初始 commit。
 Active 期间，用户使用 Git staging/discard；切分支、commit、stash 或修改 history 前请先 suspend。
+
+## 手动中断 Agent 后
+
+如果 Stop 没有执行，在同一 Kiro 会话直接提交下一条 prompt 会续接尚未关闭的 Relay turn。
+Hook 会说明没有发生新的 human-to-agent handoff，轮次、review 基线、工作区和 index 均保持原样，
+不再次宣布原有的审批和人类修改文件列表。重复 hook 也使用这份续接提示，不改变已有状态。
+
+如果准备自己编辑、stage 或 discard，先确认 Agent 及其工具已经停止，再执行：
+
+```bash
+relay end-interrupted-agent-turn
+```
+
+这是仅供人类使用的命令，执行既有 Agent Stop 收尾并进入 human 阶段。普通 turn 会保存部分输出，
+保留工作区代码，并使 proposals 保持 unstaged。命令不终止 Agent 进程，也不检测是否真的发生了取消。
+无 active session、suspended session、human 阶段均会被拒绝；成功后重复执行，或正常 Stop 已结束本轮后
+再执行，也会被拒绝。不确定时可查看 `relay status`。之后的人工修改和审批会在下一次 prompt 正常交接。
+
+该命令不能追溯区分补记边界之前已经混在一起的人类修改。`relay recover` 用于恢复中断的 Relay 事务，
+不用于补记缺失的 Agent Stop。
 
 ## 用 btw 临时插问
 
@@ -142,19 +163,14 @@ Btw 保留 HEAD、staged approvals 和手动修改，不封存 approvals，也�
 工作区和完整 index；没有变化的文件不重写。恢复范围为已捕获的项目文件，不包括无关 ignored
 文件或仓库外副作用，也不构成执行沙箱。
 
-`relay status` 和 Stop 提示会列出已保存的 btw 轮次。以第 2 轮为例：
+Btw 仅提供 `relay btw` 和 `relay btw --cancel` 两个操作。紧急快照保存后即排除在 Relay 的
+review 状态、语义 diff、status 和后续 handoff 之外；需要时可通过 `relay agent git` 查看底层快照。
+Suspend/resume 保留这些 Git 对象和下一轮 btw 选择，finish/abort 随 session 统一清理。
 
-```bash
-relay agent diff btw --turn 2                 # 保存的 workspace delta
-relay agent diff btw --turn 2 --staged        # 保存的 index delta，包括只存在于 staging 的内容
-relay agent restore-btw 2                     # 在普通 agent turn 中取回 workspace delta
-```
-
-仅允许在普通 handoff 后取回，因此来源仍为 Agent，修改保持 unstaged。取回命令加 `--staged`
-则把保存的 index delta 作为 unstaged workspace 修改应用。若与当前代码冲突，取回不修改现场，
-Agent 可以查看 patch 后自行适配。Btw 恢复记录属于当前 session，finish/abort 会统一清理。
-Suspend/resume 保留这些记录和下一轮 btw 选择。v0.3.0、v0.4.0 和 v0.5.0 共用 schema 2，
-已有 v0.3.0/v0.4.0 session 无需迁移。Agent status 返回字段的变化见
+v0.3.0 至 v0.6.0 共用 schema 2，已有 v0.3.0–v0.5.0 session 无需迁移。
+本次删除的 btw 命令和 status 字段见
+[v0.6.0 release notes](docs/releases/v0.6.0.md#compatibility-and-upgrading)。
+此前的 agent status 返回字段变化见
 [v0.5.0 release notes](docs/releases/v0.5.0.md#agent-status-compatibility)。
 从 v0.2.x 升级前，请用原版本 finish 或 abort 所有已有 session，
 并清理旧版留下的空状态文件，
@@ -185,7 +201,7 @@ relay agent diff pending                   # Reviewed checkpoint → 实时 work
 relay agent git log --oneline main          # 只读查询当前 session 之外的历史
 ```
 
-所有 diff（包括保存的 btw diff）都支持 `--name-only`、`--stat` 和 `--` 后的路径过滤：
+所有语义 diff 都支持 `--name-only`、`--stat` 和 `--` 后的路径过滤：
 
 ```bash
 relay agent diff reviewed --name-only
@@ -223,8 +239,7 @@ Stop 后的 workspace 变化。这只表达来源与方向，不表示那些行�
   "turn_kind": "normal",
   "session_changes": true,
   "pending_changes": false,
-  "provenance": {"available": true, "newly_reviewed": true, "human_edits": false},
-  "btw_recoveries": []
+  "provenance": {"available": true, "newly_reviewed": true, "human_edits": false}
 }
 ```
 
@@ -233,7 +248,7 @@ Stop 后的 workspace 变化。这只表达来源与方向，不表示那些行�
 当所有修改均已认可时，前者可以为 true、后者为 false。
 `provenance` 描述最近一次 turn 入口，轮内固定不变，第一次 handoff 前不可用；其 flags 表示
 reviewed/human diff 是否有内容，也包含 btw 入口可查询的人类修改。
-`btw_recoveries` 列出保存的改动及其查询/取回命令。没有 active session 时，只返回 `{"active": false}`。
+没有 active session 时，只返回 `{"active": false}`。
 
 Agent 概览不再包含 session ID、commit hash、origin、提交说明、下一轮控制信息、index/staging 细节
 以及静态命令列表。完整的人类诊断信息仍通过 `relay status --json` 查询；依赖这些字段的消费者应改用该命令。

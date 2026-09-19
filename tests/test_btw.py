@@ -13,6 +13,16 @@ from agent_session_relay.core.session import Relay
 
 
 class BtwTests(RepositoryTest):
+    def backup_ref(self, number, suffix="post"):
+        return f"refs/relay/sessions/{self.state()['session']}/turn-{number:06d}-{suffix}"
+
+    def saved_diff(self, number, *, staged=False):
+        suffix = "-staged" if staged else ""
+        return self.run_relay(
+            "agent", "git", "diff", "--binary",
+            self.backup_ref(number, "pre" + suffix), self.backup_ref(number, "post" + suffix),
+        ).stdout
+
     def prepare_review(self):
         self.run_relay("start", "-m", "Review the changes")
         self.hook("prompt-submit")
@@ -51,9 +61,13 @@ class BtwTests(RepositoryTest):
             self.assertEqual(self.names("session"), {"Parser.kt", "Token.kt", "Config.kt"})
             self.assertEqual(self.names("human"), {"Parser.kt", "Token.kt", "Config.kt"})
             self.assertIn("+human direction", self.run_relay("agent", "diff", "human").stdout)
-            self.assertEqual(self.hook("prompt-submit").stdout, injection)
+            continued = self.hook("prompt-submit").stdout
+            self.assertIn("No new human-to-agent handoff has occurred", continued)
+            self.assertIn("read-only BTW turn", continued)
+            self.assertEqual(self.hook("prompt-submit").stdout, continued)
             self.assertEqual(self.hook("agent-stop").stdout, "")
-            self.assertEqual(self.state()["btw_recoveries"], [])
+            self.assertNotIn("btw_recoveries", self.state())
+            self.assertEqual(self.git("for-each-ref", self.backup_ref(iteration + 2)), "")
             self.assertEqual((self.repo / ".git/index").read_bytes(), index)
             self.assertEqual(self.git("diff", "--cached"), staged)
             for name, timestamp in timestamps.items():
@@ -66,7 +80,7 @@ class BtwTests(RepositoryTest):
         self.assertEqual(self.git("diff", "--cached"), "")
         self.assertIn("+human direction", self.run_relay("agent", "diff", "human").stdout)
 
-    def test_unexpected_writes_are_saved_then_restored_and_retrieved_as_agent_changes(self):
+    def test_unexpected_writes_are_saved_then_excluded_from_relay_state(self):
         self.prepare_review()
         self.write("new-human.txt", "human addition\n")
         self.write("intent.txt", "human intent-to-add\n")
@@ -75,6 +89,11 @@ class BtwTests(RepositoryTest):
         parser = self.read("Parser.kt")
         self.run_relay("btw")
         self.hook("prompt-submit")
+        views = {kind: self.run_relay("agent", "diff", kind).stdout for kind in (
+            "session", "reviewed", "human", "pending",
+        )}
+        status = json.loads(self.run_relay("agent", "status").stdout)
+        last_post = self.metadata()["sessions"][self.state()["session"]]["last_post"]
         self.write("Token.kt", "unexpected agent work\n")
         self.write("new-human.txt", "agent edit of human addition\n")
         self.write(".gitignore", "*.ignored\nnew-human.txt\n")
@@ -85,8 +104,16 @@ class BtwTests(RepositoryTest):
         (self.repo / "Config.kt").unlink()
         self.stage_content("Parser.kt", "staged-only btw work\n")
         stop = self.hook("agent-stop").stdout
-        self.assertIn("original workspace and staging were restored", stop)
-        self.assertIn("relay agent diff btw --turn 2", stop)
+        workspace_commit = self.git("rev-parse", self.backup_ref(2)).strip()
+        staging_commit = self.git("rev-parse", self.backup_ref(2, "post-staged")).strip()
+        self.assertEqual(stop, (
+            "Project file writes or staging changes detected during a read-only BTW turn.\n"
+            f"Workspace changes were saved in snapshot {workspace_commit}.\n"
+            f"Staging changes were saved in snapshot {staging_commit}.\n"
+            "The original workspace and staging state from the last human-to-agent handoff "
+            "were restored.\n"
+        ))
+        self.assertNotIn("relay agent", stop)
         self.assertEqual(self.read("Token.kt"), "human direction\n")
         self.assertEqual(self.read("new-human.txt"), "human addition\n")
         self.assertEqual(self.read("Parser.kt"), parser)
@@ -95,31 +122,33 @@ class BtwTests(RepositoryTest):
         self.assertEqual((self.repo / ".git/index").read_bytes(), index)
         for name in ("new.bin", "run.sh", "link"):
             self.assertFalse((self.repo / name).exists())
-        recovery = self.state()["btw_recoveries"][0]
-        self.assertEqual(recovery["turn"], 2)
-        self.assertTrue(recovery["workspace_changes"])
-        self.assertTrue(recovery["index_changes"])
-        agent_recovery = json.loads(self.run_relay("agent", "status").stdout)["btw_recoveries"][0]
-        self.assertEqual(agent_recovery, recovery)
-        self.assertIn("relay agent restore-btw 2", agent_recovery["restore"])
+        self.assertEqual(json.loads(self.run_relay("agent", "status").stdout), {
+            **status, "phase": "human",
+        })
+        self.assertNotIn("btw_recoveries", self.state())
+        self.assertNotIn("Saved", self.run_relay("status").stdout)
+        session = self.metadata()["sessions"][self.state()["session"]]
+        self.assertEqual(session["last_post"], last_post)
+        self.assertIsNone(session["turns"][-1]["post"])
+        self.assertNotIn("recovery", session["turns"][-1])
+        self.assertNotIn("post_index", session["turns"][-1])
+        # Generic Git can discover and inspect the backups, even after suspend/resume and GC.
+        backup = self.backup_ref(2)
+        self.assertIn(backup, self.run_relay(
+            "agent", "git", "for-each-ref", "refs/relay/",
+        ).stdout)
+        self.run_relay("suspend")
         self.git("gc", "--prune=now")
-        saved = self.run_relay("agent", "diff", "btw", "--turn", "2").stdout
+        self.run_relay("resume")
+        for kind, expected in views.items():
+            self.assertEqual(self.run_relay("agent", "diff", kind).stdout, expected)
+        saved = self.saved_diff(2)
         self.assertIn("-human direction", saved)
         self.assertIn("+unexpected agent work", saved)
         self.assertIn("GIT binary patch", saved)
         self.assertIn("new file mode 100755", saved)
         self.assertIn("new file mode 120000", saved)
-        for options, path in (((), "Token.kt"), (("--staged",), "Parser.kt")):
-            stat = self.run_relay(
-                "agent", "diff", "btw", "--turn", "2", *options, "--stat", "--", path,
-            ).stdout
-            self.assertIn(path, stat)
-            self.assertIn("1 file changed", stat)
-            self.assertNotIn("diff --git", stat)
-        self.assertIn("+staged-only btw work", self.run_relay(
-            "agent", "diff", "btw", "--turn", "2", "--staged",
-        ).stdout)
-        self.run_relay("agent", "restore-btw", "2", ok=False)
+        self.assertIn("+staged-only btw work", self.saved_diff(2, staged=True))
         # A duplicate Stop must leave subsequent human edits and approvals alone.
         self.write("README.md", "later human edit\n")
         self.git("add", "README.md")
@@ -132,47 +161,41 @@ class BtwTests(RepositoryTest):
         self.assertNotIn("unexpected agent work", human)
         self.assertIn("+human direction", human)
         self.assertIn("+later human edit", human)
-        normal_index = (self.repo / ".git/index").read_bytes()
-        self.run_relay("agent", "restore-btw", "2")
-        self.assertEqual((self.repo / ".git/index").read_bytes(), normal_index)
-        self.assertEqual(self.read("Token.kt"), "unexpected agent work\n")
+        for kind in views:
+            current = self.run_relay("agent", "diff", kind).stdout
+            self.assertNotIn("unexpected agent work", current)
+            self.assertNotIn("staged-only btw work", current)
+            self.assertNotIn("new.bin", current)
+        self.assertEqual(self.read("Token.kt"), "human direction\n")
         self.assertEqual(self.read("README.md"), "later human edit\n")
-        self.assertEqual((self.repo / "new.bin").read_bytes(), b"\x00btw binary\xff")
+        self.assertFalse((self.repo / "new.bin").exists())
         self.assertEqual(self.run_relay("agent", "diff", "human").stdout, human)
         self.assertEqual(self.git("diff", "--cached"), "")
         self.hook("agent-stop")
         self.hook("prompt-submit")
         self.assertEqual(self.names("human"), set())
 
-    def test_staged_only_recovery_can_be_inspected_and_retrieved_unstaged(self):
+    def test_staged_only_backup_is_saved_without_affecting_review(self):
         self.run_relay("start")
         self.run_relay("btw")
         self.hook("prompt-submit")
         self.stage_content("Token.kt", "saved only in index\n")
-        self.hook("agent-stop")
+        stop = self.hook("agent-stop").stdout
+        staging_commit = self.git("rev-parse", self.backup_ref(1, "post-staged")).strip()
+        self.assertIn(f"Staging changes were saved in snapshot {staging_commit}.", stop)
+        self.assertNotIn("Workspace changes were saved", stop)
+        self.assertEqual(self.run_relay(
+            "agent", "git", "show", staging_commit + ":Token.kt",
+        ).stdout, "saved only in index\n")
         self.assertEqual(self.git("diff", "--cached"), "")
-        self.assertEqual(self.run_relay("agent", "diff", "btw", "--turn", "1").stdout, "")
+        self.assertEqual(self.saved_diff(1), "")
         self.git("gc", "--prune=now")
-        self.assertIn("+saved only in index", self.run_relay(
-            "agent", "diff", "btw", "--turn", "1", "--staged",
-        ).stdout)
+        self.assertIn("+saved only in index", self.saved_diff(1, staged=True))
         self.hook("prompt-submit")
-        self.run_relay("agent", "restore-btw", "1", "--staged")
-        self.assertEqual(self.read("Token.kt"), "saved only in index\n")
+        self.assertEqual(self.read("Token.kt"), "TokenDefinition\n")
         self.assertEqual(self.git("diff", "--cached"), "")
-
-    def test_conflicting_retrieval_leaves_workspace_untouched(self):
-        self.run_relay("start")
-        self.run_relay("btw")
-        self.hook("prompt-submit")
-        self.write("Token.kt", "btw version\n")
-        self.hook("agent-stop")
-        self.write("Token.kt", "later human version\n")
-        self.hook("prompt-submit")
-        before = self.git("diff")
-        error = self.run_relay("agent", "restore-btw", "1", ok=False).stderr
-        self.assertIn("do not apply", error)
-        self.assertEqual(self.git("diff"), before)
+        for kind in ("session", "reviewed", "human", "pending"):
+            self.assertEqual(self.names(kind), set())
 
     def test_btw_can_be_cancelled_and_retains_mode_across_hook_retries_and_suspend(self):
         self.run_relay("btw", ok=False)
@@ -186,7 +209,10 @@ class BtwTests(RepositoryTest):
         owner = {"session_id": "conversation-a"}
         injection = self.hook("prompt-submit", owner).stdout
         self.assertIn("BTW turn", injection)
-        self.assertEqual(self.hook("prompt-submit", owner).stdout, injection)
+        continued = self.hook("prompt-submit", owner).stdout
+        self.assertIn("No new human-to-agent handoff has occurred", continued)
+        self.assertIn("read-only BTW turn", continued)
+        self.assertEqual(self.hook("prompt-submit", owner).stdout, continued)
         self.run_relay("btw", "--cancel", ok=False)
         self.hook("prompt-submit", {"session_id": "conversation-b"}, ok=False)
         self.hook("agent-stop", {"session_id": "conversation-b"}, ok=False)
@@ -196,7 +222,7 @@ class BtwTests(RepositoryTest):
         self.assertIn("Leave your changes unstaged", normal_injection)
         self.assertNotIn("read-only BTW turn", normal_injection)
 
-    def test_finish_and_abort_remove_btw_snapshots_and_recovery_records(self):
+    def test_finish_and_abort_remove_btw_snapshots_without_including_their_output(self):
         for command in ("finish", "abort"):
             with self.subTest(command=command):
                 self.run_relay("start", "-m", "Complete review")
@@ -204,8 +230,12 @@ class BtwTests(RepositoryTest):
                 self.hook("prompt-submit")
                 self.write("Token.kt", "unwanted btw work\n")
                 self.hook("agent-stop")
-                self.assertTrue(self.state()["btw_recoveries"])
+                self.assertIn("unwanted btw work", self.saved_diff(1))
+                sid = self.state()["session"]
                 self.run_relay(command, input="abort\n" if command == "abort" else None)
+                self.assertEqual(self.read("Token.kt"), "TokenDefinition\n")
+                branch = f"relay/{'result' if command == 'finish' else 'aborted'}/{sid}"
+                self.assertEqual(self.git("show", branch + ":Token.kt"), "TokenDefinition\n")
                 self.assertEqual(self.git("for-each-ref", "refs/relay/"), "")
                 self.assertEqual(self.metadata()["sessions"], {})
                 self.assertNotIn("btw", self.git("branch", "--list"))
@@ -221,11 +251,12 @@ class BtwTests(RepositoryTest):
                 relay.stop()
         self.assertEqual(self.read("Token.kt"), "valuable accidental work\n")
         self.assertEqual(self.state()["phase"], "agent")
-        self.hook("agent-stop")
+        stop = self.hook("agent-stop").stdout
+        workspace_commit = self.git("rev-parse", self.backup_ref(1)).strip()
+        self.assertIn(f"Workspace changes were saved in snapshot {workspace_commit}.", stop)
+        self.assertNotIn("Staging changes were saved", stop)
         self.assertEqual(self.read("Token.kt"), "TokenDefinition\n")
-        self.assertIn("valuable accidental work", self.run_relay(
-            "agent", "diff", "btw", "--turn", "1",
-        ).stdout)
+        self.assertIn("valuable accidental work", self.saved_diff(1))
 
     def test_normal_human_path_injection_is_complete_quoted_and_has_no_patch(self):
         self.run_relay("start")
@@ -238,21 +269,27 @@ class BtwTests(RepositoryTest):
         self.assertNotIn("human body must stay out of hook", injection)
         self.assertIn("line\\nbreak.txt", injection)
 
-    def test_btw_diff_flags_and_literal_path_filtering(self):
+    def test_btw_has_only_mode_selection_and_cancellation_commands(self):
         self.run_relay("start")
         self.run_relay("btw")
         self.hook("prompt-submit")
-        self.write("dir/--name-only", "btw addition\n")
-        self.write("Token.kt", "btw token\n")
-        self.hook("agent-stop")
-        (self.repo / "dir").mkdir(exist_ok=True)
-        self.assertEqual(self.run_relay(
-            "agent", "diff", "btw", "--turn", "1", "--name-only", "-z", "--", "--name-only",
-            cwd=self.repo / "dir",
-        ).stdout, "dir/--name-only\0")
-        self.assertEqual(self.run_relay(
-            "agent", "diff", "btw", "--turn", "1", "--name-only", "-z", "--", "Token.kt",
-        ).stdout, "Token.kt\0")
-        self.run_relay("agent", "diff", "btw", ok=False)
-        self.run_relay("agent", "diff", "human", "--turn", "1", ok=False)
-        self.run_relay("agent", "diff", "pending", "--staged", ok=False)
+        self.write("Token.kt", "valuable accidental work\n")
+        before = self.metadata()
+        for args in (
+            ("agent", "restore-btw", "1"),
+            ("agent", "restore-btw", "1", "--staged"),
+            ("agent", "diff", "btw"),
+            ("agent", "diff", "btw", "--turn", "1"),
+            ("agent", "diff", "human", "--turn", "1"),
+            ("agent", "diff", "pending", "--staged"),
+        ):
+            with self.subTest(args=args):
+                result = self.run_relay(*args, ok=False)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+        self.assertEqual(self.metadata(), before)
+        self.assertEqual(self.read("Token.kt"), "valuable accidental work\n")
+        for args in (("agent", "--help"), ("agent", "diff", "--help")):
+            help_text = self.run_relay(*args).stdout
+            for removed in ("btw", "--turn", "--staged"):
+                self.assertNotIn(removed, help_text)

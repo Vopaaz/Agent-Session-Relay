@@ -1,6 +1,12 @@
-"""Compact, self-contained context for each kind of Relay turn."""
+"""Compact agent context and turn completion notices."""
 
 import json
+
+CONTINUATION = (
+    "An existing Relay agent turn is in progress, possibly because it was forcibly interrupted.\n"
+    "No new human-to-agent handoff has occurred. Review and human-edit context still refers\n"
+    "to this turn's original handoff.\n"
+)
 
 NORMAL = """The reviewed checkpoint contains previously accepted changes.
 Changes relative to that checkpoint remain pending. Reviewed code and human edits are soft
@@ -35,6 +41,8 @@ def protocol(context: dict) -> str:
         "Relay coordinates code review across human and agent turns, using Git\n"
         "for tracking human approvals and edits.\n\n"
     )
+    if context["continuing"]:
+        result += CONTINUATION + "\n"
     result += BTW if context["kind"] == "btw" else NORMAL
     result += "\n" + INSPECTION
     if context["kind"] == "normal" and context["reviewed_paths"]:
@@ -49,3 +57,15 @@ def protocol(context: dict) -> str:
         result += "\nHuman changes (repository-relative paths, JSON):\n"
         result += json.dumps(context["human_paths"], ensure_ascii=True) + "\n"
     return result
+
+
+def stop_notice(snapshots: dict[str, str] | None) -> str:
+    if not snapshots:
+        return ""
+    result = "Project file writes or staging changes detected during a read-only BTW turn.\n"
+    for area, commit in snapshots.items():
+        result += f"{area.capitalize()} changes were saved in snapshot {commit}.\n"
+    return result + (
+        "The original workspace and staging state from the last human-to-agent handoff "
+        "were restored.\n"
+    )

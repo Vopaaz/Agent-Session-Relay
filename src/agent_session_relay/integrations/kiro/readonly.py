@@ -51,6 +51,4 @@ def obvious_write(command: str) -> bool:
             arg.startswith("-i") or arg.startswith("--in-place") for arg in args
         ):
             return True
-        if executable == "relay" and args[:2] == ["agent", "restore-btw"]:
-            return True
     return False

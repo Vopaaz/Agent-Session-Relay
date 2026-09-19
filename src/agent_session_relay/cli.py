@@ -12,6 +12,7 @@ from .core.readonly_git import run as run_readonly_git
 from .core.session import Relay
 from .editor import edit_message
 from .integrations.kiro.adapter import install, run_hook
+from .integrations.protocol import stop_notice
 
 
 def parser() -> argparse.ArgumentParser:
@@ -37,6 +38,17 @@ def parser() -> argparse.ArgumentParser:
     )
     status = commands.add_parser("status", help="show session and review state")
     status.add_argument("--json", action="store_true", help="output structured state")
+    commands.add_parser(
+        "end-interrupted-agent-turn",
+        help="human-only: close an agent turn after manually interrupting the agent",
+        description=(
+            "Close an open agent turn after you have manually interrupted the agent. "
+            "Run before editing, staging, or discarding changes. This command does not stop "
+            "the agent process. It performs the same cleanup as Agent Stop and returns Relay "
+            "to the human phase. Requires an active session with an open agent turn; "
+            "inactive, suspended, and human-phase sessions are rejected."
+        ),
+    )
     btw = commands.add_parser("btw", help="make the next prompt a one-turn, read-only aside")
     btw.add_argument("--cancel", action="store_true", help="make the next prompt normal again")
     commands.add_parser("suspend", help="save the full review state and return to normal Git")
@@ -85,29 +97,18 @@ def parser() -> argparse.ArgumentParser:
             "approved or pending.\n"
             "reviewed  Approvals sealed at the latest turn entry; fixed during the turn.\n"
             "human     Human edits at the latest turn entry; fixed during the turn.\n"
-            "pending   Reviewed checkpoint -> live workspace.\n"
-            "btw       Saved btw changes selected with --turn N."
+            "pending   Reviewed checkpoint -> live workspace."
         ),
         epilog=(
             "Use -- <paths...> for literal paths relative to cwd. "
             "Empty diffs produce no output and exit 0; invalid options fail on stderr."
         ),
     )
-    diff.add_argument("kind", choices=("session", "reviewed", "human", "pending", "btw"))
-    diff.add_argument("--turn", type=int, help="saved btw turn number (for diff btw)")
-    diff.add_argument("--staged", action="store_true", help="inspect saved btw index changes")
+    diff.add_argument("kind", choices=("session", "reviewed", "human", "pending"))
     output = diff.add_mutually_exclusive_group()
     output.add_argument("--name-only", action="store_true", help="only output involved file names")
     output.add_argument("--stat", action="store_true", help="show per-file change statistics")
     diff.add_argument("-z", "--null", action="store_true", help="NUL delimit --name-only output")
-    restore = agent_commands.add_parser(
-        "restore-btw",
-        help="apply saved btw changes during a normal agent turn, leaving them unstaged",
-    )
-    restore.add_argument("turn", type=int, help="saved btw turn number")
-    restore.add_argument(
-        "--staged", action="store_true", help="retrieve the saved index delta instead"
-    )
     kiro = commands.add_parser("kiro", help="Kiro integration")
     kiro_commands = kiro.add_subparsers(dest="kiro_command", required=True)
     installer = kiro_commands.add_parser("install", help="install standalone Kiro lifecycle hooks")
@@ -174,6 +175,12 @@ def execute(args, paths: list[str]) -> int:
             f"Message: {message_subject(session['message'])}\n"
             "Review with normal Git staging; send a prompt in Kiro to hand off to the agent."
         )
+    elif args.command == "end-interrupted-agent-turn":
+        sys.stdout.write(stop_notice(relay.stop(require_open=True)))
+        print(
+            "Interrupted agent turn ended. Relay is now in the human phase.\n"
+            "Review, edit, or stage your changes before the next prompt."
+        )
     elif args.command == "btw":
         mode = relay.set_btw(cancel=args.cancel)
         print(
@@ -193,12 +200,8 @@ def execute(args, paths: list[str]) -> int:
             sys.stdout.buffer.write(
                 relay.diff(
                     args.kind, paths, name_only=args.name_only, null=args.null, stat=args.stat,
-                    number=args.turn, staged=args.staged,
                 )
             )
-        elif args.command == "agent" and args.agent_command == "restore-btw":
-            relay.restore_btw(args.turn, staged=args.staged)
-            print(f"Saved btw turn {args.turn} changes applied; they remain unstaged for review.")
         else:
             status = relay.agent_status() if args.command == "agent" else relay.status()
             if args.command == "agent" or args.json:
@@ -229,13 +232,6 @@ def execute(args, paths: list[str]) -> int:
                     "Turn provenance: "
                     f"{'available' if status['provenance']['available'] else 'none yet'}"
                 )
-                for recovery in status["btw_recoveries"]:
-                    number = recovery["turn"]
-                    print(
-                        f"Saved btw turn {number}: `relay agent diff btw --turn {number}` "
-                        "(--staged for index changes); "
-                        f"retrieve in a normal agent turn: `relay agent restore-btw {number}`"
-                    )
     elif args.command == "list":
         sessions = relay.list_sessions()
         if args.json:

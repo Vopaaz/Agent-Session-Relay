@@ -71,6 +71,10 @@ class ShellGuardTests(unittest.TestCase):
             "relay finish",
             "relay abort",
             "relay suspend",
+            "relay end-interrupted-agent-turn",
+            "env X=1 relay end-interrupted-agent-turn",
+            "relay.pyz end-interrupted-agent-turn",
+            "python3 -m agent_session_relay end-interrupted-agent-turn",
             "relay btw",
             "relay btw --cancel",
             'relay message -m "Change the session description"',
@@ -160,7 +164,6 @@ class ShellGuardTests(unittest.TestCase):
         for command in (
             "rm Token.kt", "touch new.txt", "cat source > destination", "echo x >>file",
             "sed -i s/a/b/ Token.kt", "cat Token.kt; mv Token.kt Old.kt",
-            "relay agent restore-btw 2",
         ):
             with self.subTest(command=command):
                 payload = {"tool_name": "execute_bash", "tool_input": {"command": command}}
