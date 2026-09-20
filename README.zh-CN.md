@@ -202,8 +202,9 @@ Btw 仅提供 `relay btw` 和 `relay btw --cancel` 两个操作。紧急快照�
 review 状态、语义 diff、status 和后续 handoff 之外；需要时可通过 `relay agent git` 查看底层快照。
 Suspend/resume 保留这些 Git 对象和下一轮 btw 选择，finish/abort 随 session 统一清理。
 
-v0.3.0 至 v0.6.0 共用 schema 2，已有 v0.3.0–v0.5.0 session 无需迁移。
-本次删除的 btw 命令和 status 字段见
+v0.3.0 至 v0.7.0 共用 worktree schema 2，已有 session 无需迁移。
+多仓库 session 和精简 hook 上下文见 [v0.7.0 release notes](docs/releases/v0.7.0.md)。
+v0.6.0 删除的 btw 命令和 status 字段见
 [v0.6.0 release notes](docs/releases/v0.6.0.md#compatibility-and-upgrading)。
 此前的 agent status 返回字段变化见
 [v0.5.0 release notes](docs/releases/v0.5.0.md#agent-status-compatibility)。

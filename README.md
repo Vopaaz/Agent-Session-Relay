@@ -216,8 +216,10 @@ from Relay's review state, semantic diffs, status, and subsequent handoffs. If n
 underlying snapshots through `relay agent git`. Suspend/resume preserves these Git objects and any
 pending btw selection; finish/abort deletes them with the session.
 
-Versions 0.3.0 through 0.6.0 share schema 2, so existing v0.3.0–v0.5.0 sessions need no migration.
-For the removed btw commands and status fields,
+Versions 0.3.0 through 0.7.0 share per-worktree schema 2, so existing sessions need no migration.
+For multi-repository sessions and smaller hook context, see the
+[v0.7.0 release notes](docs/releases/v0.7.0.md).
+For the btw commands and status fields removed in v0.6.0,
 see the [v0.6.0 release notes](docs/releases/v0.6.0.md#compatibility-and-upgrading).
 The earlier agent status changes are documented in the
 [v0.5.0 release notes](docs/releases/v0.5.0.md#agent-status-compatibility).

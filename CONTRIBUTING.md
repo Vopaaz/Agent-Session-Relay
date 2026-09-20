@@ -58,18 +58,24 @@ python3 -m venv .venv
 python -m pip install --upgrade build twine ruff
 python -m unittest discover -s tests -v
 ruff check .
-python scripts/build_pypi.py
+relay_release_version=0.7.0  # Set the intended release version; must match __version__.
+python scripts/build_pypi.py --tag "v${relay_release_version}"
 python scripts/build_zipapp.py
 ```
 
 Inspect the files under `dist/pypi/` and test the wheel if desired. To publish them to the real PyPI,
-run the following explicit command; Twine will request your PyPI token if it is not configured:
+rebuild with the expected version and upload only those two files. The `&&` prevents an unsuccessful
+build or version check from falling through to uploading stale artifacts. Twine will request your
+PyPI token if it is not configured:
 
 ```bash
-python -m twine upload dist/pypi/*
+python scripts/build_pypi.py --tag "v${relay_release_version}" &&
+python -m twine upload \
+  "dist/pypi/agent_session_relay-${relay_release_version}-py3-none-any.whl" \
+  "dist/pypi/agent_session_relay-${relay_release_version}.tar.gz"
 ```
 
-For a rehearsal, use `python -m twine upload --repository testpypi dist/pypi/*` instead. A
+For a rehearsal, add `--repository testpypi` to the Twine command instead. A
 `v<version>` tag triggers a workflow that checks the tag against the package version and creates a
 **draft** GitHub release containing the validated wheel, source distribution, zipapp, and checksum.
 The draft uses `docs/releases/v<version>.md` as its release notes. It never uploads to PyPI; a
