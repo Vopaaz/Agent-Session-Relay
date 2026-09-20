@@ -33,20 +33,33 @@ def atomic_json(path: Path, value: dict) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
-class Store:
-    def __init__(self, git: Git):
-        self.git = git
-        self.directory = git.git_dir / "agent-session-relay"
+def remove_journal(path: Path) -> None:
+    """Persist the commit point before releasing the objects needed for rollback."""
+    path.unlink(missing_ok=True)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+class MetadataStore:
+    schema = 2
+
+    def __init__(self, directory: Path):
+        self.directory = directory
         self.path = self.directory / "state.json"
         self.journal_path = self.directory / "transaction.json"
+        self._locked = False
+        self.coordinated_journal: dict | None = None
 
     def load(self) -> dict:
         if not self.path.exists():
-            return {"schema": 2, "active": None, "sessions": {}}
+            return {"schema": self.schema, "active": None, "sessions": {}}
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
             if (
-                value["schema"] != 2
+                value["schema"] != self.schema
                 or not isinstance(value["sessions"], dict)
                 or (value["active"] is not None and value["active"] not in value["sessions"])
             ):
@@ -64,7 +77,7 @@ class Store:
         atomic_json(self.path, value)
 
     def assert_ready(self) -> None:
-        if self.journal_path.exists():
+        if self.journal_path.exists() and self.coordinated_journal is None:
             raise RelayError(
                 "An interrupted Relay operation needs recovery. Run `relay recover`; "
                 "it preserves the current code before restoring the previous session state."
@@ -72,6 +85,11 @@ class Store:
 
     @contextmanager
     def lock(self):
+        # A workspace coordinator holds every member lock for the whole operation.
+        # Calls into that same Store instance may safely enter the lock again.
+        if self._locked:
+            yield
+            return
         try:
             import fcntl
         except ImportError as exc:
@@ -87,9 +105,17 @@ class Store:
                     "Another Relay command is running in this worktree; retry shortly."
                 ) from exc
             try:
+                self._locked = True
                 yield
             finally:
+                self._locked = False
                 fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+class Store(MetadataStore):
+    def __init__(self, git: Git):
+        super().__init__(git.git_dir / "agent-session-relay")
+        self.git = git
 
     @contextmanager
     def transaction(self, state: dict, session_id: str, action: str, workspace: str):
@@ -98,6 +124,38 @@ class Store:
         After process termination, explicit recovery preserves any subsequently edited code.
         Git objects are pinned before the journal is written, including the original index.
         """
+        if self.coordinated_journal is not None:
+            if self.coordinated_journal["namespace"] != f"refs/relay/sessions/{session_id}/":
+                raise RelayError("Workspace transaction refers to a different member session.")
+            yield self.coordinated_journal
+            return
+        journal = self.prepare(state, session_id, action, workspace)
+        try:
+            yield journal
+        except BaseException as original:
+            try:
+                self.rollback(journal)
+            except BaseException as rollback_error:
+                raise RelayError(
+                    f"{action} failed and rollback could not complete: {rollback_error}. "
+                    "Snapshots are retained. Run `relay recover`."
+                ) from original
+            preserved = [ref for ref in journal.get("preserved_refs", []) if self.git.refs(ref)]
+            if preserved and isinstance(original, Exception):
+                branches = ", ".join(ref.removeprefix("refs/heads/") for ref in preserved)
+                raise RelayError(
+                    f"{action} failed: {original}. Previous session state restored. "
+                    f"Recovery code remains at {branches}."
+                ) from original
+            raise
+        else:
+            self.complete(journal)
+
+    def prepare(
+        self, state: dict, session_id: str, action: str, workspace: str,
+        *, coordinator: Path | None = None,
+    ) -> dict:
+        """Pin a before-image, then write its journal before any visible mutation."""
         self.assert_ready()
         git = self.git
         txid = uuid.uuid4().hex
@@ -114,10 +172,10 @@ class Store:
         git.pin(prefix + "staged", staged)
         namespace = f"refs/relay/sessions/{session_id}/"
         refs = git.refs(namespace)
-        if message := refs.get(namespace + "message"):
-            # Finish/abort remove session refs before the journal commit point. JSON OIDs
-            # alone cannot keep the saved message alive through a crash followed by Git GC.
-            git.pin(prefix + "message", message)
+        # Keep *all* prior snapshots alive if finish/abort removes the session refs.
+        # A journal's JSON object IDs alone do not protect those objects from Git GC.
+        for ref, oid in refs.items():
+            git.pin(prefix + "saved/" + ref.removeprefix(namespace), oid)
         journal = {
             "state": copy.deepcopy(state),
             "head": git.head(),
@@ -129,31 +187,14 @@ class Store:
             "created_refs": {},
             "action": action,
         }
+        if coordinator is not None:
+            journal["coordinator"] = str(coordinator)
         atomic_json(self.journal_path, journal)
-        try:
-            yield journal
-        except BaseException as original:
-            try:
-                # No external work is allowed during a command. At this point a rollback only
-                # undoes this process's own transition; no extra recovery branch is needed.
-                self.rollback(journal)
-            except BaseException as rollback_error:
-                raise RelayError(
-                    f"{action} failed and rollback could not complete: {rollback_error}. "
-                    "Snapshots are retained. Run `relay recover`."
-                ) from original
-            preserved = [ref for ref in journal.get("preserved_refs", []) if git.refs(ref)]
-            if preserved and isinstance(original, Exception):
-                branches = ", ".join(ref.removeprefix("refs/heads/") for ref in preserved)
-                raise RelayError(
-                    f"{action} failed: {original}. Previous session state restored. "
-                    f"Recovery code remains at {branches}."
-                ) from original
-            raise
-        else:
-            # This unlink commits the transaction; leftover transaction refs are harmless.
-            self.journal_path.unlink()
-            git.delete_refs(git.refs(prefix))
+        return journal
+
+    def complete(self, journal: dict) -> None:
+        remove_journal(self.journal_path)
+        self.git.delete_refs(self.git.refs(journal["prefix"]))
 
     def record_created_ref(
         self, journal: dict, ref: str, oid: str, *, preserve: bool = False
@@ -163,7 +204,7 @@ class Store:
             journal.setdefault("preserved_refs", []).append(ref)
         atomic_json(self.journal_path, journal)
 
-    def rollback(self, journal: dict) -> None:
+    def rollback(self, journal: dict, *, cleanup: bool = True) -> None:
         git = self.git
         current = git.workspace_tree(previous=journal["workspace"])
         target = git.tree(journal["workspace"])
@@ -189,8 +230,8 @@ class Store:
             if git.text("rev-parse", "--verify", ref, check=False) == oid:
                 git.delete_refs({ref: oid})
         self.save(journal["state"])
-        self.journal_path.unlink()
-        git.delete_refs(git.refs(journal["prefix"]))
+        if cleanup:
+            self.complete(journal)
 
     def recover(self) -> str:
         if not self.journal_path.exists():
@@ -199,6 +240,8 @@ class Store:
             journal = json.loads(self.journal_path.read_text(encoding="utf-8"))
         except ValueError as exc:
             raise RelayError(f"Recovery journal is invalid: {self.journal_path}") from exc
+        if journal.get("coordinator"):
+            raise RelayError("This operation belongs to a workspace. Run `relay recover` there.")
         self.git.assert_stable()
         # Explicit recovery may run hours later. Preserve new human edits before rolling back.
         workspace = self.git.workspace_tree(previous=journal["workspace"])

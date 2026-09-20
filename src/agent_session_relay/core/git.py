@@ -338,6 +338,7 @@ class Git:
         name_only: bool = False,
         null: bool = False,
         stat: bool = False,
+        prefix: str = "",
     ) -> bytes:
         filters = []
         for name in paths:
@@ -353,8 +354,8 @@ class Git:
             "--no-textconv",
             "--no-color",
             "--no-renames",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
+            "--src-prefix=a/" + prefix,
+            "--dst-prefix=b/" + prefix,
         ]
         if name_only:
             args.append("--name-only")

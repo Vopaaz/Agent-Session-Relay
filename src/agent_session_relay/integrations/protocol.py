@@ -35,26 +35,43 @@ they include internal bookkeeping.
 
 
 def protocol(context: dict) -> str:
+    multi = "repositories" in context
     result = (
         "[Agent-Session-Relay active]\n\n"
-        "This Git repository is managed by Relay.\n"
-        "Relay coordinates code review across human and agent turns, using Git\n"
+        + (
+            "These Git repositories share one Relay session.\n"
+            if multi
+            else "This Git repository is managed by Relay.\n"
+        )
+        + "Relay coordinates code review across human and agent turns, using Git\n"
         "for tracking human approvals and edits.\n\n"
     )
+    if multi:
+        result += "Workspace: " + json.dumps(context["workspace"]) + "\n"
+        result += "Repositories (name to absolute path, JSON):\n"
+        result += json.dumps(context["repositories"], ensure_ascii=True) + "\n\n"
     if context["continuing"]:
         result += CONTINUATION + "\n"
     result += BTW if context["kind"] == "btw" else NORMAL
     result += "\n" + INSPECTION
+    if multi:
+        result += (
+            "\nStatus and semantic diffs cover every member, regardless of cwd.\n"
+            "Diff output paths are workspace-relative. Use --repo <name> to select a member;\n"
+            "Path filters after -- remain relative to cwd. For history queries, use\n"
+            "`relay agent git --repo <name> <args...>`. Lifecycle controls act on the group.\n"
+        )
+    path_scope = "workspace-relative" if multi else "repository-relative"
     if context["kind"] == "normal" and context["reviewed_paths"]:
         result += (
             "\nApprovals are sealed into the reviewed checkpoint this turn.\n"
             "Approved hunks are excluded from `diff pending`, but the rest of the file "
             "they are in may still contain pending changes.\n"
-            "Approved changes (repository-relative paths, JSON):\n"
+            f"Approved changes ({path_scope} paths, JSON):\n"
         )
         result += json.dumps(context["reviewed_paths"], ensure_ascii=True) + "\n"
     if context["kind"] == "normal" and context["human_paths"]:
-        result += "\nHuman changes (repository-relative paths, JSON):\n"
+        result += f"\nHuman changes ({path_scope} paths, JSON):\n"
         result += json.dumps(context["human_paths"], ensure_ascii=True) + "\n"
     return result
 
@@ -64,7 +81,8 @@ def stop_notice(snapshots: dict[str, str] | None) -> str:
         return ""
     result = "Project file writes or staging changes detected during a read-only BTW turn.\n"
     for area, commit in snapshots.items():
-        result += f"{area.capitalize()} changes were saved in snapshot {commit}.\n"
+        label = area.capitalize() if area in ("workspace", "staging") else area
+        result += f"{label} changes were saved in snapshot {commit}.\n"
     return result + (
         "The original workspace and staging state from the last human-to-agent handoff "
         "were restored.\n"

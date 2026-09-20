@@ -7,8 +7,8 @@ from pathlib import Path
 
 from ...core.errors import RelayError
 from ...core.git import Git
-from ...core.session import Relay
 from ...core.storage import atomic_json
+from ...core.workspace import Workspace, discover
 from ..protocol import protocol, stop_notice
 from .guard import violation
 
@@ -77,14 +77,18 @@ def run_hook(event: str) -> int:
         locations.append(payload["cwd"])
     relay = None
     for location in dict.fromkeys(locations):
-        try:
-            candidate = Relay(Git(location))
-        except RelayError:
+        candidate = discover(location, required=False)
+        if candidate is None:
             continue
+        # A workspace journal can precede its active pointer during a failed start,
+        # or outlive it during finish. It must never silently disable the hook.
+        if isinstance(candidate, Workspace):
+            candidate.store.assert_ready()
         if candidate.active(candidate.store.load(), required=False):
             candidate.store.assert_ready()
+            if relay is not None and relay.store.path != candidate.store.path:
+                raise RelayError("Hook directories identify different active Relay sessions.")
             relay = candidate
-            break
     if relay is None:
         return 0
     if invalid:

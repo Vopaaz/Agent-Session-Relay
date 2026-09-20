@@ -28,6 +28,13 @@ restart Kiro from an environment where `relay --version` works. Start a new Kiro
 Remove the dedicated file to uninstall. Duplicate lifecycle delivery (for example, both installation
 scopes) is idempotent while a turn is open; it cannot reseal approvals or erase that turn's provenance.
 
+With hooks loaded, [multi-repository workspaces](workspaces.md) are discoverable from their common
+parent, any selected member, or a member's subdirectory. The same group receives each hook regardless
+of entry location. The protocol lists all members and uses workspace-relative changed paths.
+Unselected repositories remain independent. Conflicting active sessions in process cwd and event cwd
+are rejected, and an interrupted workspace transaction reports recovery rather than silently disabling
+the hooks. No environment variable or additional hook installation format is required.
+
 ## Hook protocol
 
 | Entrypoint | Input | Output while active |
@@ -37,7 +44,7 @@ scopes) is idempotent while a turn is open; it cannot reseal approvals or erase 
 | `relay kiro hook pre-tool-use` | JSON `tool_name` and `tool_input` | Silent success, or guidance on stderr with exit 2 to block |
 
 The adapter reads JSON from stdin without evaluating it. `cwd` helps discover the active repository
-when a launcher does not use the workspace as the process directory. Changing a shell tool's own
+or multi-repository workspace when a launcher uses a different process directory. Changing a tool's own
 working-directory argument does not disable the current workspace's guard. Prompts and tool inputs
 are not written into Relay metadata. A `session_id` identifies ownership of an open agent turn.
 

@@ -2,6 +2,31 @@
 
 The [requirements](requirements.md) define the product. The core has no dependency on Kiro or on
 an agent SDK. `Git` handles plumbing, `Store` handles durability, and `Relay` handles review semantics.
+`Workspace` coordinates those per-worktree engines for a multi-repository session. The
+[workspace contract](workspaces.md) extends the single-worktree behavior below.
+
+## Workspace coordination
+
+`core/workspace.py` discovers `.relay/` at an explicit common parent. Its schema-1 state holds member
+paths/worktree identities, the active pointer, and logical workspace sessions. Member engines retain
+schema-2 storage in their own Git directories; standalone sessions need no migration. Member IDs
+share the group ID prefix, with distinct suffixes for linked worktrees sharing one object database.
+Discovery from any member returns the whole workspace. Nonmembers remain independent.
+
+Status/diffs aggregate member views. Phase, mode, turn, ownership, and lifecycle stay in step; bases,
+checkpoints, indexes, and snapshots remain independent. One injected protocol includes membership and
+workspace-relative changed paths. Diff filters remain relative to cwd.
+
+`MetadataStore` supplies versioned JSON and locks. `Store.prepare()` separates creation of a recovery
+journal from its commit point so the coordinator can prepare every member before invoking existing
+`Relay` methods. Those methods reuse their prepared journal and already-held lock. All previous
+session refs are pinned, including provenance removed by finish/abort.
+
+After all members succeed, the coordinator saves workspace state and records a durable commit
+decision. Only then does it release member journals and recovery refs. Ordinary errors restore all
+members before recording completed rollback. Recovery of an undecided operation preserves current
+code in all prepared members before rollback; recovery after commit only completes cleanup. A retained
+coordinator journal blocks hooks and lifecycle commands, including after partial start/finish.
 
 ## Baselines
 
@@ -156,7 +181,7 @@ refs/relay/transactions/<id>/
   index                     Before-transition raw index blob
   staged                    GC protection for staged-only object contents
   intent-to-add             GC protection for the empty blob
-  message                   Optional saved session message, protected through cleanup/recovery
+  saved/<session-ref-name>  Previous session refs, including message and every provenance snapshot
 ```
 
 Snapshot commits have B as their parent; checkpoint commits have the previous checkpoint as parent.

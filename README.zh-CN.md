@@ -28,6 +28,40 @@ unstaged changes 或未跟踪新文件的形式显示。
 
 **Human 使用 Git。Agent 使用 Relay。Relay 在内部使用 Git。**
 
+## 一个功能涉及多个仓库
+
+在几个仓库的共同父目录启动一个 session：
+
+```bash
+cd parent
+relay start --repo ./cdk --repo ./service --repo ./integration-tests -m "新增订单取消能力"
+```
+
+在 Relay hooks 已加载的前提下，harness 可以从 `parent`、任一成员仓库或成员仓库的子目录启动。
+这些位置的人类命令和 hooks 都会发现同一个 session。各仓库保留自己的 Git staging UI 和
+reviewed checkpoint；轮次、btw 模式、suspend/resume、finish/abort 统一作用于整个 session。
+未指定的仓库不会自动加入。
+
+```bash
+relay status                                      # 所有成员的 review 进度
+relay agent diff human --name-only                 # 例如 service/src/order.ts
+relay agent diff pending --repo service            # 只查看此仓库的 patch
+relay agent git --repo service log --oneline main   # 从此仓库根目录查询历史
+relay message --repo cdk -m "配置订单取消事件"         # 可选的单仓库 commit message
+relay finish                                      # 所有成员都必须完成 review
+```
+
+Diff 的输出路径相对于 workspace，`--` 后的路径过滤仍相对于 cwd。在 `parent` 中可用
+`relay agent diff pending --repo service -- service/src/order.ts`；进入 `service` 后可用
+`relay agent diff pending -- src/order.ts`。不加过滤的 diff 在这两个位置都覆盖全部成员。
+
+Finish 为每个有净修改的仓库生成一个结果 commit，parent 为该仓库自己的 immutable base。
+没有修改的成员返回原分支，不生成空 commit。结果分支使用共同的 session ID 前缀和成员后缀。
+共同父目录的 `.relay/` 保存成员列表和协调状态；之后执行 `relay start` 会复用这些成员，不需要
+环境变量。未配置 workspace 的目录继续使用原有单仓库流程。
+
+成员规则、消息覆盖和失败恢复详见[多仓库会话说明](docs/workspaces.md)。
+
 ## 安装
 
 需要 **Python 3.10+**、**Git 2.37+**，以及 Linux、macOS 或 WSL。Python 运行时没有第三方依赖。
@@ -109,7 +143,7 @@ context。** 普通 Kiro 对话中的 Git 使用不受影响。
 
 | 命令 | 效果 |
 | --- | --- |
-| `relay start [-m "message"]` | 从完全 clean、稳定的 Git 工作区开始，可选填写本次工作的说明 |
+| `relay start [--repo PATH ...] [-m "message"]` | 从 clean、稳定的 worktrees 开始，可选指定多个仓库和本次工作的说明 |
 | `relay message [session] [-m "message"]` | 设置 session 说明；省略 `-m` 则打开 Git 编辑器 |
 | `relay status` | 查看 session 说明、生命周期、reviewed checkpoint、staged approvals 和剩余 proposals |
 | `relay end-interrupted-agent-turn` | 手动中断 Agent 后，在人工 review 前结束尚未关闭的 agent turn |

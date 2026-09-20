@@ -31,6 +31,41 @@ Relay captures the agent's output and presents it as unstaged changes or untrack
 
 **The human uses Git. The agent uses Relay. Relay uses Git internally.**
 
+## One feature across multiple repositories
+
+Start one session from the repositories' common parent:
+
+```bash
+cd parent
+relay start --repo ./cdk --repo ./service --repo ./integration-tests -m "Add order cancellation"
+```
+
+With Relay hooks loaded, the harness can start in `parent`, any selected repository, or a member's
+subdirectory. Human commands and hooks discover the same session in all these locations. Each member
+keeps its own staging UI and reviewed checkpoint; turns, btw mode, suspend/resume, and finish/abort
+belong to the entire session. Unselected repositories are not enrolled.
+
+```bash
+relay status                                      # progress across all members
+relay agent diff human --name-only                 # names such as service/src/order.ts
+relay agent diff pending --repo service            # just this member's patch
+relay agent git --repo service log --oneline main   # query from this member's root
+relay message --repo cdk -m "Configure cancellation events"  # optional message override
+relay finish                                      # all members must be fully reviewed
+```
+
+Diff output paths are workspace-relative; path filters after `--` remain relative to cwd. From
+`parent`, use `relay agent diff pending --repo service -- service/src/order.ts`; inside `service`,
+use `relay agent diff pending -- src/order.ts`. An unfiltered diff covers all members in either case.
+
+Finish creates one result commit per changed repository, parented by its own immutable base.
+Unchanged members return to their origin without an empty commit. Result branches share a session ID
+prefix with a member suffix. The common parent's `.relay/` directory records the membership and
+coordination state; subsequent `relay start` commands reuse these members. No environment variable is
+needed. Existing single-repository usage continues to work outside configured workspaces.
+
+See [multi-repository sessions](docs/workspaces.md) for membership, messages, and recovery details.
+
 ## Install
 
 Requires **Python 3.10+**, **Git 2.37+**, and Linux, macOS, or WSL. There are no Python runtime
@@ -112,7 +147,7 @@ See [integration details and a live smoke test](https://github.com/Vopaaz/Agent-
 
 | Command | Effect |
 | --- | --- |
-| `relay start [-m "message"]` | Start from a completely clean, stable Git workspace, optionally describing the work |
+| `relay start [--repo PATH ...] [-m "message"]` | Start from clean, stable worktrees; optionally select multiple repositories and describe the work |
 | `relay message [session] [-m "message"]` | Set the session message; omit `-m` to open the Git editor |
 | `relay status` | Show the session message, lifecycle, reviewed checkpoint, staged approvals, and remaining proposals |
 | `relay end-interrupted-agent-turn` | After manually interrupting the agent, close its open turn before human review |

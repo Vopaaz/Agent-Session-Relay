@@ -142,7 +142,7 @@ class Relay:
                 for session in self.store.load()["sessions"].values()
             ]
 
-    def start(self, message: str | None = None) -> dict:
+    def start(self, message: str | None = None, *, session_id: str | None = None) -> dict:
         with self.store.lock():
             self.store.assert_ready()
             state = self.store.load()
@@ -153,7 +153,9 @@ class Relay:
                 origin = self.git.head()
             except RelayError as exc:
                 raise RelayError("Create an initial Git commit before starting Relay.") from exc
-            sid = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
+            sid = session_id or (
+                datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
+            )
             if message is not None:
                 message = self.validate_message(message)
             session = {
@@ -570,7 +572,7 @@ class Relay:
 
     def diff(
         self, kind: str, paths: list[str], *, name_only: bool = False, null: bool = False,
-        stat: bool = False,
+        stat: bool = False, prefix: str = "",
     ) -> bytes:
         if not self.active(self.store.load(), required=False):
             raise RelayError("No active Relay session. Use `relay start` or `relay resume`.")
@@ -589,4 +591,6 @@ class Relay:
                     left, right = turn["human_from"], turn["pre"]
             else:
                 left = right = session["reviewed"]
-            return self.git.diff(left, right, paths, name_only=name_only, null=null, stat=stat)
+            return self.git.diff(
+                left, right, paths, name_only=name_only, null=null, stat=stat, prefix=prefix,
+            )

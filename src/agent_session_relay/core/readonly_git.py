@@ -291,7 +291,7 @@ def validate(args: list[str]) -> str:
     return command
 
 
-def run(args: list[str]) -> int:
+def run(args: list[str], *, cwd: str | None = None) -> int:
     command = validate(args)
     # Preserve config locations, but discard routing, command-config, tracing, and
     # execution overrides inherited from the caller. No shell is involved.
@@ -323,7 +323,7 @@ def run(args: list[str]) -> int:
         invocation.extend(["--no-ext-diff", "--no-textconv"])
     invocation.extend(args[1:])
     try:
-        result = subprocess.run(invocation, env=env, check=False)
+        result = subprocess.run(invocation, env=env, check=False, cwd=cwd)
     except FileNotFoundError as exc:
         raise RelayError("Git is required and must be on PATH.") from exc
     return result.returncode if result.returncode >= 0 else 128 - result.returncode
