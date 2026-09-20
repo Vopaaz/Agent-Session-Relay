@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import os
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -202,19 +201,20 @@ class Relay:
 
     def handoff_context(self, session: dict, *, continuing: bool = False) -> dict:
         turn = session["turns"][-1]
-        human_names = reviewed_names = b""
+        human_stats = reviewed_stats = []
         if turn["kind"] == "normal" and not continuing:
-            human_names = self.git.diff(
-                turn["human_from"], turn["pre"], [], name_only=True, null=True
-            )
-            reviewed_names = self.git.diff(
-                turn["reviewed_from"], turn["reviewed_to"], [], name_only=True, null=True
-            )
+            human_stats = self.git.diff_stats(turn["human_from"], turn["pre"])
+            reviewed_stats = self.git.diff_stats(turn["reviewed_from"], turn["reviewed_to"])
         return {
             "kind": turn["kind"],
             "continuing": continuing,
-            "human_paths": [os.fsdecode(name) for name in human_names.split(b"\0") if name],
-            "reviewed_paths": [os.fsdecode(name) for name in reviewed_names.split(b"\0") if name],
+            # Recorded turn owners survive process restarts and suspend/resume. None is
+            # the fallback conversation when the harness supplies no session identity.
+            "full_context": not continuing and not any(
+                previous.get("owner") == turn.get("owner") for previous in session["turns"][:-1]
+            ),
+            "human_stats": human_stats,
+            "reviewed_stats": reviewed_stats,
         }
 
     def handoff(self, owner: str | None = None) -> dict | None:
@@ -269,8 +269,11 @@ class Relay:
                 )
                 session["phase"] = "agent"
                 session["next_turn"] = "normal"
+                # If generating the initial context fails, roll back the handoff too so
+                # its retry still receives the full introduction and fresh provenance.
+                context = self.handoff_context(session)
                 self.store.save(state)
-            return self.handoff_context(session)
+            return context
 
     def stop(
         self, owner: str | None = None, *, require_open: bool = False,

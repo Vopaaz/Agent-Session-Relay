@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from tests.support import RepositoryTest
+from tests.support import RepositoryTest, injected_stats
 
 # isort: split
 from agent_session_relay.core.git import Git
@@ -32,9 +32,9 @@ class InterruptedTurnTests(RepositoryTest):
         self.git("add", "Token.kt")
         self.write("Config.kt", "human direction\n")
         initial = self.hook("prompt-submit", owner).stdout
-        self.assertIn("Approvals are sealed", initial)
-        self.assertIn("Human changes (", initial)
-        self.assertNotIn("No new human-to-agent handoff", initial)
+        self.assertEqual(injected_stats(initial, "Approved"), {"Token.kt": (1, 1)})
+        self.assertIn("Human edits at turn start (", initial)
+        self.assertNotIn("Continuing the open turn", initial)
         self.write("Parser.kt", "partial agent work\n")
         self.stage_content("Parser.kt", "agent staging\n")
         before = self.review_state()
@@ -44,14 +44,14 @@ class InterruptedTurnTests(RepositoryTest):
         }
 
         continued = self.hook("prompt-submit", {**owner, "prompt": "Try another approach"}).stdout
-        self.assertIn("An existing Relay agent turn is in progress", continued)
-        self.assertIn("possibly because it was forcibly interrupted", continued)
-        self.assertIn("this turn's original handoff", continued)
+        self.assertIn("Continuing the open turn", continued)
+        self.assertIn("reviewed/human diffs still refer to its original handoff", continued)
         self.assertIn("Leave your changes unstaged", continued)
-        self.assertIn("relay agent diff human", continued)
+        self.assertIn("Do not run Git directly", continued)
+        self.assertNotIn("relay agent diff human", continued)
         self.assertNotIn("Approvals are sealed", continued)
-        self.assertNotIn("Human changes (", continued)
-        self.assertNotIn("Approved changes (", continued)
+        self.assertFalse(injected_stats(continued, "Human"))
+        self.assertFalse(injected_stats(continued, "Approved"))
         self.assertEqual(self.hook("prompt-submit", owner).stdout, continued)
         self.assertEqual(self.review_state(), before)
         for kind, expected in provenance.items():
@@ -93,9 +93,9 @@ class InterruptedTurnTests(RepositoryTest):
         self.assertEqual(self.review_state(), before)
 
         injection = self.hook("prompt-submit", {"session_id": "conversation-b"}).stdout
-        self.assertNotIn("No new human-to-agent handoff", injection)
-        self.assertIn("Approvals are sealed", injection)
-        self.assertIn('["Config.kt"]', injection)
+        self.assertNotIn("Continuing the open turn", injection)
+        self.assertEqual(injected_stats(injection, "Approved"), {"Token.kt": (1, 1)})
+        self.assertEqual(injected_stats(injection, "Human"), {"Config.kt": (1, 1)})
         self.assertEqual(self.state()["turn"], 2)
         self.assertEqual(self.names("human"), {"Config.kt"})
         self.assertEqual(self.names("reviewed"), {"Token.kt"})

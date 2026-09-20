@@ -126,13 +126,16 @@ Three hooks implement the workflow:
 
 | Event | Relay behavior |
 | --- | --- |
-| Prompt Submit (`UserPromptSubmit`) | Snapshot the turn and inject its protocol; normal turns also seal approvals and list human-changed files |
+| Prompt Submit (`UserPromptSubmit`) | Snapshot the turn and inject Relay context; normal turns also seal approvals and include per-file change counts |
 | Agent Stop (`Stop`) | Leave normal output pending; save unexpected btw writes before restoring the original review state |
 | Pre Tool Use (`PreToolUse`) | Block direct Git commands; during btw, also block known write tools and obvious shell writes |
 
-Every active turn receives a compact, self-contained protocol for its mode. Normal turns with human
-changes automatically include their complete file list, covering edits and discards; full patches
-remain on demand. Btw turns omit that list but retain semantic queries. No separate Agent Skill is needed.
+The first interaction in each conversation within a Relay session receives the full protocol. Later
+interactions receive a brief reminder that Relay is active, Git must go through Relay, and edits stay
+unstaged (or the turn is read-only for btw).
+Each new normal turn includes per-file added/deleted line counts for approvals and human changes,
+including discards; binary changes are marked `binary`. Full patches remain on demand. Btw turns
+omit these stats but retain semantic queries. No separate Agent Skill is needed.
 
 **With no active session, including while suspended, every hook succeeds silently without changing
 Git or injecting context.** Normal Kiro conversations retain their ordinary Git behavior.
@@ -169,8 +172,8 @@ committing, stashing, or rewriting history.
 ## After manually interrupting the agent
 
 If Stop did not run, submitting another prompt in the same Kiro conversation continues the open
-Relay turn. The hook explains that no new human-to-agent handoff occurred. The turn number, review
-baselines, workspace, and index stay intact; old approval/human file lists are not announced again.
+Relay turn. The hook reminds the agent that reviewed/human diffs still refer to the original handoff.
+The turn number, review baselines, workspace, and index stay intact; old stats are not announced again.
 Repeated hook delivery uses the same continuation notice and preserves the same state.
 
 Before editing, staging, or discarding anything yourself, ensure the agent and its tools have stopped,
@@ -276,9 +279,9 @@ direct edits **and discards**, since both change the workspace after the agent s
 ownership or an instruction to preserve those lines verbatim. Before the next handoff, staged
 approvals are still part of the delta against the previous reviewed checkpoint.
 
-Normal-turn hooks announce approvals only when changes were sealed at that handoff, listing the
-affected paths separately from human edits. Only the approved hunks leave `pending`; a partially
-approved file can appear in both `reviewed` and `pending`.
+Normal-turn hooks announce approvals only when changes were sealed at that handoff, listing per-file
+added/deleted line counts separately from human edits. Only the approved hunks leave `pending`;
+a partially approved file can appear in both `reviewed` and `pending`.
 
 `relay agent status` focuses on decisions the agent can make:
 
@@ -371,9 +374,9 @@ Send the next prompt:
 
 Prompt Submit seals `Token.kt` and the selected parser hunks into the reviewed checkpoint. The
 index becomes clean; the remaining parser and configuration changes stay pending. Relay snapshots
-pre-agent code, records the newly reviewed patch and human changes, and injects the protocol again.
-The hook lists `Parser.kt`/`Token.kt` as containing newly approved changes and `Parser.kt`/`README.md`
-as human-edited paths.
+pre-agent code, records the newly reviewed patch and human changes, and injects a brief Relay reminder.
+The hook includes line counts for newly approved changes in `Parser.kt`/`Token.kt` and human edits in
+`Parser.kt`/`README.md`.
 
 The agent can first get a file overview:
 
@@ -500,7 +503,7 @@ src/agent_session_relay/
     storage.py              Atomic metadata, process lock, recovery journal
     session.py              Review lifecycle and provenance baselines
   integrations/
-    protocol.py             Self-contained instructions injected every active turn
+    protocol.py             Initial instructions and brief reminders with change stats
     kiro/                   Installation, lifecycle adapter, shell/Git guard
 docs/                       Requirements, architecture, integration contract
 tests/                      Real Git workflow and adapter tests

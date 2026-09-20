@@ -4,7 +4,7 @@ import json
 import os
 from unittest.mock import patch
 
-from tests.support import RepositoryTest
+from tests.support import RepositoryTest, injected_stats
 
 # isort: split
 from agent_session_relay.core.errors import RelayError
@@ -47,7 +47,7 @@ class BtwTests(RepositoryTest):
             injection = self.hook("prompt-submit").stdout
             self.assertIn("BTW turn", injection)
             self.assertNotIn("Approvals are sealed", injection)
-            self.assertNotIn("Human changes (", injection)
+            self.assertFalse(injected_stats(injection, "Human"))
             self.assertNotIn("Token.kt", injection)
             self.assertEqual(self.state()["turn_kind"], "btw")
             self.assertEqual(self.state()["next_turn"], "normal")
@@ -62,7 +62,7 @@ class BtwTests(RepositoryTest):
             self.assertEqual(self.names("human"), {"Parser.kt", "Token.kt", "Config.kt"})
             self.assertIn("+human direction", self.run_relay("agent", "diff", "human").stdout)
             continued = self.hook("prompt-submit").stdout
-            self.assertIn("No new human-to-agent handoff has occurred", continued)
+            self.assertIn("Continuing the open turn", continued)
             self.assertIn("read-only BTW turn", continued)
             self.assertEqual(self.hook("prompt-submit").stdout, continued)
             self.assertEqual(self.hook("agent-stop").stdout, "")
@@ -73,7 +73,9 @@ class BtwTests(RepositoryTest):
             for name, timestamp in timestamps.items():
                 self.assertEqual((self.repo / name).stat().st_mtime_ns, timestamp)
         injection = self.hook("prompt-submit").stdout
-        self.assertIn('["Config.kt", "Parser.kt", "Token.kt"]', injection)
+        self.assertEqual(injected_stats(injection, "Human"), {
+            "Config.kt": (1, 1), "Parser.kt": (1, 1), "Token.kt": (1, 1),
+        })
         self.assertNotIn("human direction", injection)
         self.assertEqual(self.state()["turn_kind"], "normal")
         self.assertEqual(self.names("reviewed"), {"Parser.kt"})
@@ -210,7 +212,7 @@ class BtwTests(RepositoryTest):
         injection = self.hook("prompt-submit", owner).stdout
         self.assertIn("BTW turn", injection)
         continued = self.hook("prompt-submit", owner).stdout
-        self.assertIn("No new human-to-agent handoff has occurred", continued)
+        self.assertIn("Continuing the open turn", continued)
         self.assertIn("read-only BTW turn", continued)
         self.assertEqual(self.hook("prompt-submit", owner).stdout, continued)
         self.run_relay("btw", "--cancel", ok=False)
@@ -258,14 +260,19 @@ class BtwTests(RepositoryTest):
         self.assertEqual(self.read("Token.kt"), "TokenDefinition\n")
         self.assertIn("valuable accidental work", self.saved_diff(1))
 
-    def test_normal_human_path_injection_is_complete_quoted_and_has_no_patch(self):
+    def test_normal_human_stats_are_complete_quoted_and_have_no_patch(self):
         self.run_relay("start")
-        names = ['new file.txt', 'line\nbreak.txt', '中文.txt']
+        names = ['new file.txt', 'line\nbreak.txt', '中文.txt', 'tab\t"quote.txt']
         for name in names:
             self.write(name, "human body must stay out of hook\n")
+        self.write("binary.dat", b"\0\xffbinary")
+        (self.repo / "README.md").unlink()
+        (self.repo / "Config.kt").chmod(0o755)
         injection = self.hook("prompt-submit").stdout
-        encoded = injection.split("Human changes (repository-relative paths, JSON):\n")[1]
-        self.assertEqual(set(json.loads(encoded)), set(names))
+        self.assertEqual(injected_stats(injection, "Human"), {
+            **{name: (1, 0) for name in names},
+            "binary.dat": (None, None), "README.md": (0, 1), "Config.kt": (0, 0),
+        })
         self.assertNotIn("human body must stay out of hook", injection)
         self.assertIn("line\\nbreak.txt", injection)
 

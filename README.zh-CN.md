@@ -122,13 +122,14 @@ relay kiro install --project
 
 | 事件 | Relay 的操作 |
 | --- | --- |
-| Prompt Submit (`UserPromptSubmit`) | 保存快照并注入本轮协议；普通 turn 还会吸收 approvals、列出 human 改动文件 |
+| Prompt Submit (`UserPromptSubmit`) | 保存快照并注入 Relay 上下文；普通 turn 还会吸收 approvals、列出逐文件改动行数 |
 | Agent Stop (`Stop`) | 普通输出保持 pending；btw 意外写入先保存，再恢复原 review 状态 |
 | Pre Tool Use (`PreToolUse`) | 拦截直接 Git 调用；btw 期间还会拦截已知写工具和明显的 shell 写入 |
 
-每个 active turn 都注入适用于本轮模式的简洁、自包含协议。普通 turn 存在 human 改动时，
-自动注入完整文件列表，包括编辑和 discard；完整 patch 仍按需查询。Btw 不主动注入该列表，
-但保留语义查询。不需要单独安装 Agent Skill。
+同一 Relay session 中，每个对话首次交互注入完整协议，后续只简短提醒 Relay 正在生效、
+通过 Relay 查询 Git、修改保持未暂存（btw 时改为只读提醒）。每次新的普通 turn 仍自动注入
+本轮批准和 human 改动的逐文件新增、删除行数，包括编辑和 discard；二进制改动标为 `binary`。
+完整 patch 仍按需查询。Btw 不主动注入统计，但保留语义查询。不需要单独安装 Agent Skill。
 
 **没有 active session 时，包括 suspended 期间，所有 hooks 都成功静默退出，不修改 Git，也不注入
 context。** 普通 Kiro 对话中的 Git 使用不受影响。
@@ -164,8 +165,8 @@ Active 期间，用户使用 Git staging/discard；切分支、commit、stash �
 ## 手动中断 Agent 后
 
 如果 Stop 没有执行，在同一 Kiro 会话直接提交下一条 prompt 会续接尚未关闭的 Relay turn。
-Hook 会说明没有发生新的 human-to-agent handoff，轮次、review 基线、工作区和 index 均保持原样，
-不再次宣布原有的审批和人类修改文件列表。重复 hook 也使用这份续接提示，不改变已有状态。
+Hook 会提醒 reviewed/human diff 仍来自原 handoff；轮次、review 基线、工作区和 index 均保持原样，
+不再次注入原有的审批和人类修改统计。重复 hook 也使用这份续接提示，不改变已有状态。
 
 如果准备自己编辑、stage 或 discard，先确认 Agent 及其工具已经停止，再执行：
 
@@ -260,7 +261,7 @@ Patch 包含 binary changes；rename 以删除/新增显示，便于明确过滤
 Stop 后的 workspace 变化。这只表达来源与方向，不表示那些行必须原样保留。下一次 handoff 前，
 本轮 staged approvals 仍包含在相对旧 reviewed checkpoint 的 delta 中。
 
-普通 turn 的 hook 仅在本次 handoff 确实封存了审批时发出通知，并单独列出涉及路径，与 human edits 区分。
+普通 turn 的 hook 仅在本次 handoff 确实封存了审批时发出通知，并单独列出逐文件新增、删除行数，与 human edits 区分。
 只有被认可的 hunks 离开 `pending`；部分认可的文件仍可同时出现在 `reviewed` 和 `pending` 中。
 
 `relay agent status` 只输出有助于 Agent 判断当前状态的信息：
@@ -350,8 +351,8 @@ Changes:
 
 Prompt Submit 将 `Token.kt` 和 staged parser hunks 吸收到 reviewed checkpoint，清空 index 中相对
 新 checkpoint 的 delta，保留其余 Parser/Config pending changes。随后保存 pre-agent 快照和本轮
-review/human provenance，再次注入完整协议。
-Hook 列出 `Parser.kt`/`Token.kt` 包含本轮新认可的改动，以及 `Parser.kt`/`README.md` 存在人类编辑。
+review/human provenance，注入简短的 Relay 提醒。
+Hook 分别列出 `Parser.kt`/`Token.kt` 本轮新认可改动，以及 `Parser.kt`/`README.md` 人类编辑的改动行数。
 
 Agent 可以先查看文件范围：
 
@@ -473,7 +474,7 @@ src/agent_session_relay/
     storage.py              原子 metadata、进程锁、恢复日志
     session.py              Review 生命周期与 provenance baselines
   integrations/
-    protocol.py             每个 active turn 注入的自包含说明
+    protocol.py             首次完整说明、后续简短提醒与改动统计
     kiro/                   安装、生命周期适配与 shell/Git guard
 docs/                       需求、架构、接入规则
 tests/                      真实 Git 工作流与 adapter 测试

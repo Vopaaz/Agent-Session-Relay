@@ -251,20 +251,24 @@ Relay 保存足够的信息，使 Agent 后续可以通过 Relay 查询：
 * 用户从上一轮以来新 review 通过的 patch；
 * 用户从上一轮以来直接编辑的 patch；
 * 当前仍 pending 的完整 patch；
-* 各类 patch 涉及的文件列表。
+* 各类 patch 涉及的文件列表及逐文件新增、删除行数。
 
-普通 turn 存在 human 改动时，必须自动注入完整的 human 文件列表，并明确说明有人类修改。
-仅当本次 handoff 确实封存了审批时，额外通知并列出 newly reviewed 的完整路径列表。
+普通 turn 存在 human 改动时，必须自动注入完整路径及逐文件新增、删除行数；二进制改动标为 binary。
+仅当本次 handoff 确实封存了审批时，额外列出 newly reviewed 的逐文件改动行数，与 human edits 分开。
 路径列表不表示整个文件均已认可；只有被认可的 hunks 离开 pending。通知依据本轮保存的
-reviewed_from/reviewed_to，而不是封存后通常已为 false 的 staged_approvals。重复或续接 hook 保留原基线，改为注入续接说明，不重复宣布原来的审批和人类修改列表。
+reviewed_from/reviewed_to，而不是封存后通常已为 false 的 staged_approvals。重复或续接 hook 保留原基线，改为注入续接说明，不重复注入原来的审批和人类修改统计。
 Human workspace 变化统一称 edits，不暗示存在独立的 discard/rejection 状态。
 完整 patches 仍由 Agent 按需通过 `relay agent ...` 查询，不默认注入。
 
 ### 4. Inject Relay protocol
 
-Prompt Submit hook 每次 active Relay handoff 都应注入一段相对稳定、自包含的 Relay 使用说明。
+同一 Relay session 中，每个 harness 对话首次交互注入完整 Relay 使用说明，后续仅注入简短提醒。
+提醒保留 active session 标识、不直接运行 Git、控制操作交给人类，以及保持修改未暂存或 btw 只读。
+非 btw 注入词不强调 normal turn。每次新的普通 handoff 仍注入上述改动统计。
+按已记录的 session_id/turn owner 判断首次交互，suspend/resume 和多仓库 cwd 切换不重置；
+没有 session_id 时，同一 Relay session 共用一次完整说明。
 
-除普通 turn 自动注入 human 文件列表外，协议应以简洁、自包含的说明让此前不了解 Relay 的 Agent 理解：
+首次完整协议应以简洁、自包含的说明让此前不了解 Relay 的 Agent 理解：
 
 * 当前 workspace 正处于 Relay session；
 * Relay 是什么；
@@ -533,7 +537,7 @@ Relay 不阻止这种修改。
 
 若 Agent 被人类手动中断且 Stop 未执行，同一会话再次提交 prompt 续接原 turn；不新增轮次、
 不封存审批、不重置 workspace/index，不改变 reviewed/human diff 的原入口基线。
-注入词说明现有 turn 仍未关闭、可能曾被强制中断，且未发生新的 human-to-agent handoff。
+简短续接词说明现有 turn 仍未关闭，reviewed/human diff 仍对应原 handoff。
 重复 hook 同样使用续接词；不能据此断定用户确实取消了 Agent。不同的已知会话 owner 仍被拒绝。
 
 人工编辑、stage 或 discard 之前，人类可执行 `relay end-interrupted-agent-turn` 补记结束边界。
@@ -681,9 +685,9 @@ Prompt Submit hook：
 3. 保留其余 Parser.kt / Config.kt pending changes；
 4. 保存 pre-agent snapshot；
 5. 保存本轮 review/human-edit provenance；
-6. 再次向 Agent 注入 Relay protocol 和 `relay agent` 使用方式。
+6. 向 Agent 注入简短 Relay 提醒和本轮改动统计。
 
-普通 turn 存在 human 改动时，hook 自动注入 human 文件列表；完整 diff 仍按需查询。
+普通 turn 存在 human 改动时，hook 自动注入逐文件新增、删除行数；完整 diff 仍按需查询。
 
 Agent 可以先自行查询：
 
@@ -1025,9 +1029,9 @@ no side effects
 
 Agent-Session-Relay 是一个新工具，不能假设 Agent 已通过训练了解它。
 
-因此 active Relay session 的 Prompt Submit hook 应当在每轮稳定注入 Relay protocol。
+因此 active Relay session 的 Prompt Submit hook 在每个对话首次交互注入完整协议，后续保留简短提醒。
 
-这段 context 应优先解释：
+首次完整 context 应优先解释：
 
 * Relay 是什么；
 * human review 如何映射到 Git staging；
@@ -1041,8 +1045,9 @@ Agent-Session-Relay 是一个新工具，不能假设 Agent 已通过训练了�
 * `--name-only`；
 * path filtering。
 
-普通 turn 有 human 改动时，自动注入完整 human 文件列表，包含编辑、discard、增删文件。
-Btw 不主动注入此列表，保留查询入口。任何模式均不默认注入完整 patch。
+每次新的普通 turn 有 human 改动时，自动注入完整路径及逐文件新增、删除行数，包含编辑、discard、增删文件。
+统计标题明确范围为本轮批准或轮次开始时的人类修改；路径使用 JSON 转义，二进制改动不伪造行数。
+Btw 不主动注入统计，保留查询入口。任何模式均不默认注入完整 patch。
 协议只解释 Relay 特有语义与必要命令，不添加通用 Agent 行为指导或重复的模式说明。
 
 Agent 应根据当前任务自己决定：

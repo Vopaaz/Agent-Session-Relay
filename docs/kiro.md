@@ -39,7 +39,7 @@ the hooks. No environment variable or additional hook installation format is req
 
 | Entrypoint | Input | Output while active |
 | --- | --- | --- |
-| `relay kiro hook prompt-submit` | Optional JSON `cwd`, `session_id` | Mode-specific protocol; normal turns also include any newly approved and human-changed paths; exit 2 on error |
+| `relay kiro hook prompt-submit` | Optional JSON `cwd`, `session_id` | Full initial protocol or brief reminder; new normal turns also include per-file approval and human-change stats; exit 2 on error |
 | `relay kiro hook agent-stop` | Optional JSON `cwd`, `session_id` | Usually silent; brief notice after saving and restoring unexpected btw writes; exit 2 on error |
 | `relay kiro hook pre-tool-use` | JSON `tool_name` and `tool_input` | Silent success, or guidance on stderr with exit 2 to block |
 
@@ -48,14 +48,23 @@ or multi-repository workspace when a launcher uses a different process directory
 working-directory argument does not disable the current workspace's guard. Prompts and tool inputs
 are not written into Relay metadata. A `session_id` identifies ownership of an open agent turn.
 
-Normal prompts announce approvals only when they were sealed at that handoff. The notice lists
-paths from `diff reviewed` and explains that the files may still contain pending hunks. Approvals
-and human edits have separate complete JSON arrays of repository-relative paths, each omitted when
-empty; no patch is injected. JSON escaping keeps unusual filenames on a single data line. Prompts
-for an already open turn, including repeated hooks, inject a continuation notice instead of repeating
-those path lists. They preserve the original turn, review baselines, and mode. Btw prompts omit both lists, while
-`relay agent diff human` still exposes the accumulated changes at btw entry.
-The protocol explains the live `session`/`pending` views, fixed `reviewed`/`human` views, and
+The first interaction for each `session_id` within a Relay session receives the full protocol.
+Later interactions receive only the active-session marker, Git/Relay control restrictions, and
+the unstaged-edit or read-only reminder. A new conversation receives the introduction again;
+suspend/resume and changing cwd within a multi-repository workspace do not reset this history.
+Without `session_id`, all prompts share one introduction per Relay session.
+
+Each new normal turn still includes fresh per-file stats, separately labeled `Approved this turn`
+and `Human edits at turn start`. These compare the saved `reviewed` and `human` baselines, with
+each section omitted when empty. Every changed path appears with `+added -deleted` line counts,
+or `binary` when line counts are unavailable. Paths are repository-relative for single repositories
+and workspace-relative for multi-repository sessions, with JSON quoting to keep unusual filenames
+on one line. No patch is injected. Prompts for an already open turn, including repeated hooks, add
+a brief continuation notice without repeating old stats. They preserve the original turn, review
+baselines, and mode. Btw prompts omit both sections, while `relay agent diff human` still exposes
+the accumulated changes at btw entry.
+
+The initial protocol explains the live `session`/`pending` views, fixed `reviewed`/`human` views, and
 `--name-only`/`--stat`/path filtering. It calls human workspace changes "edits", without implying
 a separately tracked discard/rejection state.
 Mode selection comes from `relay btw`, not from interpreting the user's natural-language prompt.
@@ -102,13 +111,14 @@ with real Git, but do not launch or impersonate a real Kiro agent service.
    is rejected by the command without creating a branch.
 5. Stage one hunk in your normal Git UI, edit another hunk manually, and send a second prompt. Verify
    staged approvals are sealed, `diff reviewed` shows that exact hunk, `diff human` shows the manual
-   edit, and `diff pending` shows the unresolved remainder. The hook must list newly approved and
-   human-changed paths separately, without their patch contents. `diff session --stat` must still
-   include the approved work. On a later approval-only handoff, only the approval list appears;
-   on a handoff without approvals, there is no approval notice.
+   edit, and `diff pending` shows the unresolved remainder. The hook must use a brief reminder and
+   list newly approved and human-changed paths with line counts, without their patch contents.
+   `diff session --stat` must still include the approved work. On a later approval-only handoff,
+   only the approval stats appear; on a handoff without approvals, there is no approval notice.
 6. After Agent Stop, stage one hunk and manually edit another. Run `relay btw`, then ask a code
-   question. Verify no human file list is injected, human diff is still queryable, known writes are
-   blocked, and staging survives Stop. Send a normal prompt and verify the full human list returns.
+   question. Verify the read-only reminder replaces the unstaged-edit reminder, no change stats are
+   injected, human diff remains queryable, known writes are blocked, and staging survives Stop.
+   Send a normal prompt and verify the human stats return without repeating the full protocol.
 7. In a disposable test, allow a script to make a change during btw to exercise the fallback. Verify
    Stop reports emergency snapshot preservation and restores the pre-btw state. Status and all
    semantic diffs must exclude those writes, including on the next normal turn. If needed, inspect
@@ -125,10 +135,11 @@ hook event's workspace corresponds to `relay status`. Old Kiro versions without 
 stdin tool payload cannot provide this integration's complete Git guard and should be upgraded.
 
 If an Agent Stop was missed, a new prompt in the same conversation continues the open Relay turn.
-The continuation notice says an interruption is a possibility, not a detected event. To begin human
-review, first stop the agent and any writing tools, then run `relay end-interrupted-agent-turn` before
-editing, staging, or discarding. The command records the end boundary using the existing Stop cleanup;
-it does not terminate the Kiro process. Inactive/suspended sessions and the human phase are rejected,
+The continuation notice preserves the original reviewed/human comparisons; it does not infer an
+interruption. To begin human review, first stop the agent and any writing tools, then run
+`relay end-interrupted-agent-turn` before editing, staging, or discarding. The command records the
+end boundary using the existing Stop cleanup; it does not terminate the Kiro process.
+Inactive/suspended sessions and the human phase are rejected,
 including repeated manual calls after success. Automatic duplicate Stop hooks remain silent.
 The existing guard blocks the command from agent tool calls. Relay cannot reconstruct human/agent
 provenance for edits made across a missing boundary. `relay recover` only handles interrupted Relay

@@ -3,9 +3,7 @@
 import json
 
 CONTINUATION = (
-    "An existing Relay agent turn is in progress, possibly because it was forcibly interrupted.\n"
-    "No new human-to-agent handoff has occurred. Review and human-edit context still refers\n"
-    "to this turn's original handoff.\n"
+    "Continuing the open turn; reviewed/human diffs still refer to its original handoff.\n"
 )
 
 NORMAL = """The reviewed checkpoint contains previously accepted changes.
@@ -18,6 +16,14 @@ Answer without modifying project files or Git state, including through shell com
 If edits are requested, explain that this turn is read-only and ask for a new prompt.
 Do not switch modes yourself.
 """
+
+REMINDER = (
+    "Do not run Git directly; use `relay agent ...`. Leave Relay controls to the human.\n"
+)
+
+BRIEF_NORMAL = "Leave your changes unstaged for human review.\n"
+
+BRIEF_BTW = "This is a read-only BTW turn: do not modify files or Git state.\n"
 
 INSPECTION = """Do not run Git directly. Leave session and turn-mode control to the human. Use:
   relay agent status          # mode, review state
@@ -36,43 +42,50 @@ they include internal bookkeeping.
 
 def protocol(context: dict) -> str:
     multi = "repositories" in context
-    result = (
-        "[Agent-Session-Relay active]\n\n"
-        + (
-            "These Git repositories share one Relay session.\n"
-            if multi
-            else "This Git repository is managed by Relay.\n"
+    result = "[Agent-Session-Relay active]\n"
+    if context["full_context"]:
+        result += (
+            "\nThese Git repositories share one Relay session.\n"
+            if multi else "\nThis Git repository is managed by Relay.\n"
         )
-        + "Relay coordinates code review across human and agent turns, using Git\n"
-        "for tracking human approvals and edits.\n\n"
-    )
-    if multi:
-        result += "Workspace: " + json.dumps(context["workspace"]) + "\n"
-        result += "Repositories (name to absolute path, JSON):\n"
-        result += json.dumps(context["repositories"], ensure_ascii=True) + "\n\n"
+        result += (
+            "Relay coordinates code review across human and agent turns, using Git\n"
+            "for tracking human approvals and edits.\n\n"
+        )
+        if multi:
+            result += "Workspace: " + json.dumps(context["workspace"]) + "\n"
+            result += "Repositories (name to absolute path, JSON):\n"
+            result += json.dumps(context["repositories"], ensure_ascii=True) + "\n\n"
+        # Bootstrap review semantics even if the first interaction is a read-only aside.
+        result += ("For normal turns:\n" if context["kind"] == "btw" else "") + NORMAL
+        if context["kind"] == "btw":
+            result += "\n" + BTW
+        result += "\n" + INSPECTION
+        if multi:
+            result += (
+                "\nStatus and semantic diffs cover all repositories.\n"
+                "Diff output paths are workspace-relative. Use --repo <name> to select a member.\n"
+                "Path filters after -- remain relative to cwd. For history queries, use\n"
+                "`relay agent git --repo <name> <args...>`.\n"
+            )
+    else:
+        result += REMINDER + (BRIEF_BTW if context["kind"] == "btw" else BRIEF_NORMAL)
     if context["continuing"]:
-        result += CONTINUATION + "\n"
-    result += BTW if context["kind"] == "btw" else NORMAL
-    result += "\n" + INSPECTION
-    if multi:
-        result += (
-            "\nStatus and semantic diffs cover every member, regardless of cwd.\n"
-            "Diff output paths are workspace-relative. Use --repo <name> to select a member;\n"
-            "Path filters after -- remain relative to cwd. For history queries, use\n"
-            "`relay agent git --repo <name> <args...>`. Lifecycle controls act on the group.\n"
-        )
+        result += CONTINUATION
     path_scope = "workspace-relative" if multi else "repository-relative"
-    if context["kind"] == "normal" and context["reviewed_paths"]:
-        result += (
-            "\nApprovals are sealed into the reviewed checkpoint this turn.\n"
-            "Approved hunks are excluded from `diff pending`, but the rest of the file "
-            "they are in may still contain pending changes.\n"
-            f"Approved changes ({path_scope} paths, JSON):\n"
-        )
-        result += json.dumps(context["reviewed_paths"], ensure_ascii=True) + "\n"
-    if context["kind"] == "normal" and context["human_paths"]:
-        result += f"\nHuman changes ({path_scope} paths, JSON):\n"
-        result += json.dumps(context["human_paths"], ensure_ascii=True) + "\n"
+    if context["kind"] == "normal" and not context["continuing"]:
+        for label, key in (
+            ("Approved this turn", "reviewed_stats"),
+            ("Human edits at turn start", "human_stats"),
+        ):
+            if context[key]:
+                result += f"\n{label} (+/- lines; {path_scope} paths):\n"
+                for entry in context[key]:
+                    counts = (
+                        "binary" if entry["added"] is None
+                        else f"+{entry['added']} -{entry['deleted']}"
+                    )
+                    result += f"{counts} {json.dumps(entry['path'], ensure_ascii=True)}\n"
     return result
 
 

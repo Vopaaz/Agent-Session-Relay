@@ -12,6 +12,27 @@ SOURCE = Path(__file__).resolve().parents[1]
 CLI = SOURCE / "relay"
 
 
+def injected_stats(output: str, kind: str) -> dict[str, tuple[int | None, int | None]]:
+    """Read the public hook's per-file additions/deletions for one provenance category."""
+    heading = {"Approved": "Approved this turn (", "Human": "Human edits at turn start ("}[kind]
+    lines = iter(output.splitlines())
+    for line in lines:
+        if line.startswith(heading):
+            break
+    else:
+        return {}
+    result = {}
+    for line in lines:
+        if not line:
+            break
+        if line.startswith("binary "):
+            result[json.loads(line.removeprefix("binary "))] = (None, None)
+        else:
+            added, deleted, name = line.split(" ", 2)
+            result[json.loads(name)] = (int(added), -int(deleted))
+    return result
+
+
 class RepositoryTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="relay-test-")

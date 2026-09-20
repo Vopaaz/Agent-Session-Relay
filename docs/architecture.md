@@ -50,8 +50,9 @@ At a normal Prompt Submit, with `I` and `W` captured independently:
 3. Move only detached HEAD and the internal reviewed ref to the new checkpoint; load its tree into I.
 4. Leave working files untouched, including partial-file proposals and untracked files.
 5. Save W as Pn, and record `(Rold, Rnew, last_normal_post, Pn)` for provenance.
-6. Mark the phase `agent`. The adapter emits the protocol, any newly approved paths, and any
-   human-changed paths as separate lists derived from the saved turn comparisons.
+6. Mark the phase `agent`. Build context from the saved turn comparisons before committing the
+   transaction, so a failed stats read rolls back the handoff. The adapter emits Relay instructions
+   and separate per-file line counts for newly approved changes and human edits.
 
 The initial `Q0` is B. Thus edits made between start and the first prompt are human proposals.
 
@@ -61,9 +62,9 @@ does nothing, so it cannot erase approvals made after the first Stop.
 
 An additional Prompt Submit while the phase is already `agent` is a continuation, including
 repeated hook delivery. It does not create another turn, seal approvals, or change the original
-provenance. The returned context carries a transient `continuing` flag; the protocol explains that
-no new handoff occurred and omits the original approval/human path announcements. The saved
-reviewed/human diffs remain queryable. This does not distinguish an interrupted response from a
+provenance. The returned context carries a transient `continuing` flag; the brief reminder says that
+reviewed/human diffs retain their original handoff and omits the original approval/human stats.
+The saved reviewed/human diffs remain queryable. This does not distinguish an interrupted response from a
 hook retry, and no cancellation event is inferred or persisted. A different known conversation
 owner is still rejected.
 
@@ -127,12 +128,11 @@ The reviewed/human views stay fixed while the agent works; session and pending a
 support patch output, `--name-only` (optionally `-z`), or `--stat`, with literal path filtering.
 Empty output remains a successful empty diff; invalid options fail on stderr with a nonzero exit.
 
-Approval notifications are derived from the turn's Rold → Rnew paths, not from the live index:
+Approval stats are derived from the turn's Rold → Rnew comparison, not from the live index:
 sealing resets I to R, so `staged_approvals` is normally false after an actual approval. Continuation
-hooks retain those comparisons without reannouncing their paths. Btw seals nothing and emits neither
-path list.
-An approved path may still contain pending hunks; notification wording does not imply file-level
-approval. No additional persistent event state is needed.
+hooks retain those comparisons without reannouncing stats. Btw seals nothing and emits neither
+stats section. `git diff --numstat -z` supplies exact additions/deletions, binary markers, and complete
+paths without patch content. An approved path may still contain pending hunks.
 
 Snapshot and diff operations use a temporary index. Snapshotting copies the real index, expands any
 split index, accounts for tracked files removed from the index but still present on disk, stages the
@@ -263,9 +263,12 @@ Duplicate prompt events during the same open turn preserve its original provenan
 ## Adapter boundary
 
 An adapter discovers the active worktree, parses lifecycle metadata, calls `handoff` / `stop`, emits
-the mode-specific protocol plus normal-turn approval and human file names, and translates tool
-events into guard decisions. The core does not read prompt text or call an agent API. New adapters
-belong under `integrations/<harness>/`.
+Relay context and new normal-turn approval/human stats, and translates tool events into guard
+decisions. The first handoff for a conversation owner within a Relay session gets the full protocol;
+later hooks get brief mode-specific reminders. This is derived from saved turn owners, including
+across suspend/resume; missing owners share one fallback introduction. No additional persistent
+event state is needed. The core does not read prompt text or call an agent API. New adapters belong
+under `integrations/<harness>/`.
 
 Kiro is implemented; other harnesses are extension points. The shell parser is a workflow guard,
 not a general interpreter or security sandbox. See [Kiro](kiro.md) and [SECURITY.md](../SECURITY.md).

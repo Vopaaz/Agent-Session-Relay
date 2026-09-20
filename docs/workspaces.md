@@ -37,6 +37,11 @@ Each member retains its own base, reviewed HEAD, index, snapshots, and semantic 
 next-turn mode, and conversation ownership are coordinated. Normal/btw and interrupted-turn rules
 apply to the entire group. Duplicate hooks from different member directories continue the same turn.
 
+The first hook in each conversation introduces all members and their paths. Later hooks use a brief
+Relay reminder; changing cwd does not repeat the introduction. Each new normal turn includes per-file
+added/deleted line counts for approvals and human edits, with workspace-relative paths such as
+`r1/src/main.py`. Binary changes are marked `binary`.
+
 Status and unfiltered semantic diffs cover all members regardless of cwd. Status JSON adds a
 `workspace` path and `repositories` mapping keyed by workspace-relative repository name. Top-level
 change/provenance flags are true when any member has that property. Agent status continues to omit

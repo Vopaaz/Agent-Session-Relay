@@ -339,6 +339,7 @@ class Git:
         null: bool = False,
         stat: bool = False,
         prefix: str = "",
+        numstat: bool = False,
     ) -> bytes:
         filters = []
         for name in paths:
@@ -359,6 +360,8 @@ class Git:
         ]
         if name_only:
             args.append("--name-only")
+        elif numstat:
+            args.append("--numstat")
         elif stat:
             args.append("--stat")
         else:
@@ -366,3 +369,17 @@ class Git:
         if null:
             args.append("-z")
         return self.run(*args, left, right, "--", *filters).stdout
+
+    def diff_stats(self, left: str, right: str) -> list[dict]:
+        """Exact per-path line counts, including binary and mode-only changes."""
+        result = []
+        for record in self.diff(left, right, [], numstat=True, null=True).split(b"\0"):
+            if not record:
+                continue
+            added, deleted, path = record.split(b"\t", 2)
+            result.append({
+                "path": os.fsdecode(path),
+                "added": None if added == b"-" else int(added),
+                "deleted": None if deleted == b"-" else int(deleted),
+            })
+        return result

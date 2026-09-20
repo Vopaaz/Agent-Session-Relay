@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 
-from tests.support import RepositoryTest
+from tests.support import RepositoryTest, injected_stats
 
 
 class InspectionTests(RepositoryTest):
@@ -170,7 +170,7 @@ class InspectionTests(RepositoryTest):
     def test_approval_notice_is_conditional_partial_and_only_on_new_handoff(self):
         self.run_relay("start")
         first = self.hook("prompt-submit").stdout
-        notice = "Approvals are sealed into the reviewed checkpoint this turn."
+        notice = "Approved this turn ("
         self.assertNotIn(notice, first)
         self.assertNotIn("Staged approvals have been sealed", first)
         self.assertNotIn("edits/discards", first)
@@ -185,17 +185,15 @@ class InspectionTests(RepositoryTest):
         self.git("add", unusual)
         injection = self.hook("prompt-submit").stdout
         self.assertIn(notice, injection)
-        self.assertIn(
-            "the rest of the file they are in may still contain pending changes", injection
-        )
-        self.assertNotIn("Human changes (", injection)
-        encoded = injection.split("Approved changes (repository-relative paths, JSON):\n")[1]
-        self.assertEqual(json.loads(encoded), ["Parser.kt", unusual])
+        self.assertFalse(injected_stats(injection, "Human"))
+        self.assertEqual(injected_stats(injection, "Approved"), {
+            "Parser.kt": (1, 1), unusual: (1, 0),
+        })
         self.assertEqual(self.names("pending"), {"Parser.kt"})
         continued = self.hook("prompt-submit").stdout
-        self.assertIn("No new human-to-agent handoff has occurred", continued)
+        self.assertIn("Continuing the open turn", continued)
         self.assertNotIn(notice, continued)
-        self.assertNotIn("Approved changes (", continued)
+        self.assertFalse(injected_stats(continued, "Approved"))
         self.assertEqual(self.hook("prompt-submit").stdout, continued)
         self.hook("agent-stop")
         self.assertNotIn(notice, self.hook("prompt-submit").stdout)

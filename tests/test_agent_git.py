@@ -125,8 +125,12 @@ class AgentGitTests(RepositoryTest):
             if btw:
                 self.run_relay("btw")
             injection = self.hook("prompt-submit").stdout
-            self.assertIn("relay agent git <args...>", injection)
-            self.assertIn("internal bookkeeping", injection)
+            if not btw:
+                self.assertIn("relay agent git <args...>", injection)
+                self.assertIn("internal bookkeeping", injection)
+            else:
+                self.assertIn("Do not run Git directly", injection)
+                self.assertNotIn("internal bookkeeping", injection)
             checkpoint = self.git("rev-parse", "HEAD").strip()
             self.assertNotEqual(checkpoint, self.base)
             before = self.snapshot()

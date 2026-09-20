@@ -10,7 +10,7 @@ from unittest.mock import patch
 from agent_session_relay.core.errors import RelayError
 from agent_session_relay.core.session import Relay
 from agent_session_relay.core.workspace import Workspace
-from tests.support import SOURCE, RepositoryTest
+from tests.support import SOURCE, RepositoryTest, injected_stats
 
 
 class WorkspaceTest(RepositoryTest):
@@ -63,6 +63,32 @@ class WorkspaceTest(RepositoryTest):
 
 
 class WorkspaceWorkflowTests(WorkspaceTest):
+    def test_protocol_history_is_shared_across_members_and_new_conversations_bootstrap(self):
+        self.start()
+        owner = {"session_id": "first"}
+        first = self.hook("prompt-submit", owner).stdout
+        self.assertIn("Relay coordinates code review", first)
+        self.assertIn('"r2"', first)
+        self.hook("agent-stop", owner)
+        (self.other / "Config.kt").write_text("human change\nsecond line\n")
+        brief = self.ws(
+            "kiro", "hook", "prompt-submit", input=json.dumps(owner),
+            cwd=self.other / "subdir",
+        ).stdout
+        self.assertNotIn("Relay coordinates code review", brief)
+        self.assertNotIn("Repositories (", brief)
+        self.assertIn("Do not run Git directly", brief)
+        self.assertEqual(injected_stats(brief, "Human"), {"r2/Config.kt": (2, 1)})
+        self.hook("agent-stop", owner)
+        self.ws("suspend")
+        self.ws("resume", cwd=self.other)
+        new = self.ws(
+            "kiro", "hook", "prompt-submit", input='{"session_id":"new"}',
+        ).stdout
+        self.assertIn("Relay coordinates code review", new)
+        self.assertIn('"r1"', new)
+        self.assertIn('"r2"', new)
+
     def test_every_entry_directory_sees_one_session_and_one_turn(self):
         self.start()
         locations = [
@@ -78,17 +104,21 @@ class WorkspaceWorkflowTests(WorkspaceTest):
                 self.assertEqual(
                     json.loads(self.ws("status", "--json", cwd=location).stdout), expected
                 )
-        for location in locations:
+        for index, location in enumerate(locations):
             with self.subTest(location=location):
                 context = self.ws(
                     "kiro", "hook", "prompt-submit", input='{"session_id":"a"}', cwd=location
                 ).stdout
-                self.assertIn('"r1"', context)
-                self.assertIn('"r2"', context)
+                if index == 0:
+                    self.assertIn('"r1"', context)
+                    self.assertIn('"r2"', context)
+                else:
+                    self.assertIn("Do not run Git directly", context)
+                    self.assertNotIn("Repositories (", context)
                 status = json.loads(self.ws("agent", "status", cwd=location).stdout)
                 self.assertEqual(status["turn"], 1)
                 self.assertEqual(set(status["repositories"]), {"r1", "r2"})
-        self.assertIn("No new human-to-agent handoff", context)
+        self.assertIn("Continuing the open turn", context)
         self.ws("kiro", "hook", "agent-stop", input='{"session_id":"a"}', cwd=self.other)
         for location in locations:
             status = json.loads(self.ws("status", "--json", cwd=location).stdout)
@@ -113,8 +143,9 @@ class WorkspaceWorkflowTests(WorkspaceTest):
         self.git("add", "Token.kt")
         (self.other / "Config.kt").write_text("human config\n")
         context = self.ws("kiro", "hook", "prompt-submit", cwd=self.other).stdout
-        self.assertIn('"r1/Token.kt"', context)
-        self.assertIn('"r2/Config.kt"', context)
+        self.assertEqual(injected_stats(context, "Approved"), {"r1/Token.kt": (1, 1)})
+        self.assertEqual(injected_stats(context, "Human"), {"r2/Config.kt": (1, 1)})
+        self.assertNotIn("Repositories (", context)
         self.assertEqual(
             self.ws("agent", "diff", "reviewed", "--name-only").stdout, "r1/Token.kt\n"
         )

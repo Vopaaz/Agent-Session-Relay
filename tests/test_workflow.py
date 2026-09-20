@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.support import SOURCE, RepositoryTest
+from tests.support import SOURCE, RepositoryTest, injected_stats
 
 # isort: split
 from agent_session_relay.core.git import Git
@@ -44,8 +44,12 @@ class WorkflowTests(RepositoryTest):
         self.names("pending")
         self.assertEqual((self.repo / ".git/index").read_bytes(), before_index)
         injection = self.hook("prompt-submit").stdout
-        self.assertIn('Human changes (repository-relative paths, JSON):', injection)
-        self.assertIn('["Parser.kt", "README.md"]', injection)
+        self.assertEqual(injected_stats(injection, "Human"), {
+            "Parser.kt": (1, 1), "README.md": (1, 1),
+        })
+        self.assertEqual(injected_stats(injection, "Approved"), {
+            "Parser.kt": (1, 1), "Token.kt": (1, 1), "new.bin": (None, None),
+        })
         self.assertNotIn("human direction", injection)
         self.assertEqual(self.git("diff", "--cached"), "")
         self.assertEqual(self.names("reviewed"), {"Parser.kt", "Token.kt", "new.bin"})
@@ -63,9 +67,9 @@ class WorkflowTests(RepositoryTest):
         self.assertIn("+human direction", pending)
         # Duplicate hook execution must not erase the accepted-hunk/human provenance.
         continued = self.hook("prompt-submit").stdout
-        self.assertIn("No new human-to-agent handoff has occurred", continued)
-        self.assertNotIn("Human changes (", continued)
-        self.assertNotIn("Approved changes (", continued)
+        self.assertIn("Continuing the open turn", continued)
+        self.assertFalse(injected_stats(continued, "Human"))
+        self.assertFalse(injected_stats(continued, "Approved"))
         self.assertEqual(self.hook("prompt-submit").stdout, continued)
         self.assertEqual(self.state()["turn"], 2)
         self.assertEqual(self.run_relay("agent", "diff", "human", "--", "Parser.kt").stdout, human)

@@ -366,15 +366,16 @@ class Workspace:
             return {
                 "kind": first["kind"],
                 "continuing": first["continuing"],
+                "full_context": any(context["full_context"] for context in contexts.values()),
                 "workspace": str(self.root),
                 "repositories": {name: str(self.root / name) for name in members},
                 **{
                     key: [
-                        f"{name}/{path}"
+                        {**stats, "path": f"{name}/{stats['path']}"}
                         for name, context in contexts.items()
-                        for path in context[key]
+                        for stats in context[key]
                     ]
-                    for key in ("human_paths", "reviewed_paths")
+                    for key in ("human_stats", "reviewed_stats")
                 },
             }
 
