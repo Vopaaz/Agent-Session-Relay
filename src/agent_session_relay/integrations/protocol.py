@@ -68,6 +68,13 @@ def protocol(context: dict) -> str:
                 "Path filters after -- remain relative to cwd. For history queries, use\n"
                 "`relay agent git --repo <name> <args...>`.\n"
             )
+        if context["has_prior_turns"]:
+            result += (
+                "\nYou are taking over a Relay session with prior turns. The current workspace "
+                "may contain earlier human and agent changes. Before making changes, consider "
+                "running `relay agent diff session --stat` to understand the cumulative changes "
+                "since this Relay session began.\n"
+            )
     else:
         result += REMINDER + (BRIEF_BTW if context["kind"] == "btw" else BRIEF_NORMAL)
     if context["continuing"]:

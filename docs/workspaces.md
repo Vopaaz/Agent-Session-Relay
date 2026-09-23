@@ -82,11 +82,14 @@ them. Multiple suspended sessions with the same membership are supported. `list`
 refer to logical workspace sessions.
 
 `relay message -m "Feature description"` sets the shared description. `relay message --repo r1 -m
-"Configure events"` sets a member override, preserved when the shared description changes. Explicit
-`finish -m` overrides all saved descriptions for that finish. If the shared description is missing,
-finish opens one editor using the first member in repository-name order for Git editor/template
-configuration. Editing holds no locks; saving rechecks the group and all member review states.
-Workspace metadata stores descriptions/overrides, and member descriptions also use native Git refs.
+"Configure events"` sets a member override, preserved when the shared description changes. Finish
+always prefers each member's override. Explicit `finish -m` replaces only the shared description for
+that finish; members without overrides use it, or the saved shared description when `-m` is omitted.
+If every member has an override, no shared description or editor is needed. Otherwise, when the
+shared description is missing, finish opens one editor to supply it for members without overrides.
+The first member in repository-name order supplies Git editor/template configuration. Editing holds
+no locks; saving rechecks the group and all member review states. Workspace metadata stores
+descriptions/overrides, and member descriptions also use native Git refs.
 
 Finish requires every member's workspace to equal its index, including approvals staged since the
 last handoff. Changed members need a public Git identity. Each gets one result commit, parented by

@@ -13,10 +13,14 @@ class ProtocolTests(RepositoryTest):
     def test_full_introduction_once_per_conversation_and_session(self):
         self.run_relay("start", "-m", "Review this feature")
         introductions = []
-        for owner, full in (("a", True), ("a", False), ("b", True), ("a", False)):
+        for owner, full, takeover in (
+            ("a", True, False), ("a", False, False), ("b", True, True), ("a", False, False),
+        ):
             output = self.hook("prompt-submit", {"session_id": owner}).stdout
             self.assertEqual("Relay coordinates code review" in output, full)
             self.assertEqual("relay agent diff reviewed" in output, full)
+            self.assertEqual("You are taking over a Relay session" in output, takeover)
+            self.assertEqual("relay agent diff session --stat" in output, takeover)
             self.assertIn("[Agent-Session-Relay active]", output)
             self.assertIn("Do not run Git directly", output)
             self.assertIn("Leave your changes unstaged", output)
@@ -27,11 +31,14 @@ class ProtocolTests(RepositoryTest):
                 self.assertLess(len(output), len(introductions[0]) // 4)
                 self.assertLessEqual(len(output.splitlines()), 3)
                 self.assertIn("Leave Relay controls to the human", output)
+            retry = self.hook("prompt-submit", {"session_id": owner}).stdout
+            self.assertNotIn("You are taking over", retry)
             self.hook("agent-stop", {"session_id": owner})
         self.run_relay("finish")
         self.run_relay("start")
-        self.assertIn("Relay coordinates code review",
-                      self.hook("prompt-submit", {"session_id": "a"}).stdout)
+        first = self.hook("prompt-submit", {"session_id": "a"}).stdout
+        self.assertIn("Relay coordinates code review", first)
+        self.assertNotIn("You are taking over", first)
 
     def test_brief_turns_keep_new_stats_and_do_not_reannounce_old_changes(self):
         self.run_relay("start")
@@ -96,6 +103,7 @@ class ProtocolTests(RepositoryTest):
         self.hook("agent-stop", owner)
         new = self.hook("prompt-submit", {"session_id": "new-conversation"}).stdout
         self.assertIn("Relay coordinates code review", new)
+        self.assertIn("You are taking over a Relay session", new)
 
     def test_stat_failure_rolls_back_handoff_so_retry_gets_initial_context(self):
         self.run_relay("start")

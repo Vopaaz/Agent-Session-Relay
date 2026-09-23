@@ -73,7 +73,10 @@ def parser() -> argparse.ArgumentParser:
         "-m",
         "--message",
         action="append",
-        help="override the saved message; otherwise use it or open the Git editor",
+        help=(
+            "override the saved session/shared message; workspace repository overrides take "
+            "priority; open the Git editor only when a required message is missing"
+        ),
     )
     commands.add_parser(
         "abort", help="terminate after one confirmation, preserving a recovery branch"

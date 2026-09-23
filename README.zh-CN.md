@@ -51,6 +51,9 @@ relay message --repo cdk -m "配置订单取消事件"         # 可选的单仓
 relay finish                                      # 所有成员都必须完成 review
 ```
 
+Finish 始终优先使用单仓库消息；未设置的成员使用共享消息，`finish -m` 只替换本次使用的共享消息。
+所有成员都设置了单仓库消息时，无需共享消息；否则仅在共享消息缺失时打开一次编辑器补充。
+
 Diff 的输出路径相对于 workspace，`--` 后的路径过滤仍相对于 cwd。在 `parent` 中可用
 `relay agent diff pending --repo service -- service/src/order.ts`；进入 `service` 后可用
 `relay agent diff pending -- src/order.ts`。不加过滤的 diff 在这两个位置都覆盖全部成员。
@@ -202,7 +205,9 @@ Btw 仅提供 `relay btw` 和 `relay btw --cancel` 两个操作。紧急快照�
 review 状态、语义 diff、status 和后续 handoff 之外；需要时可通过 `relay agent git` 查看底层快照。
 Suspend/resume 保留这些 Git 对象和下一轮 btw 选择，finish/abort 随 session 统一清理。
 
-v0.3.0 至 v0.7.0 共用 worktree schema 2，已有 session 无需迁移。
+v0.3.0 至 v0.7.1 共用 worktree schema 2，已有 session 无需迁移。
+快速编辑的快照漏检修复、多仓库消息优先级修正和新会话接手提示见
+[v0.7.1 release notes](docs/releases/v0.7.1.md)。
 多仓库 session 和精简 hook 上下文见 [v0.7.0 release notes](docs/releases/v0.7.0.md)。
 v0.6.0 删除的 btw 命令和 status 字段见
 [v0.6.0 release notes](docs/releases/v0.6.0.md#compatibility-and-upgrading)。

@@ -367,6 +367,7 @@ class Workspace:
                 "kind": first["kind"],
                 "continuing": first["continuing"],
                 "full_context": any(context["full_context"] for context in contexts.values()),
+                "has_prior_turns": first["has_prior_turns"],
                 "workspace": str(self.root),
                 "repositories": {name: str(self.root / name) for name in members},
                 **{
@@ -448,7 +449,6 @@ class Workspace:
 
     def finish(self, message=None, *, editor=None) -> dict:
         expected = None
-        explicit = message is not None
         while True:
             with self._locked() as (state, members):
                 group = self.active(state)
@@ -460,14 +460,13 @@ class Workspace:
                 value = message if message is not None else group["message"]
                 if value is not None:
                     value = Relay.validate_message(value)
+                descriptions = {name: group["messages"].get(name, value) for name in members}
+                if all(description is not None for description in descriptions.values()):
                     results = {}
                     with self._transaction(state, group, members, "finish"):
                         for name, relay in members.items():
                             if changes[name]:
-                                description = (
-                                    value if explicit else group["messages"].get(name, value)
-                                )
-                                branch = relay.finish(description)
+                                branch = relay.finish(descriptions[name])
                                 results[name] = {
                                     "branch": branch,
                                     "commit": relay.git.resolve("HEAD"),

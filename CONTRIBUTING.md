@@ -58,7 +58,7 @@ python3 -m venv .venv
 python -m pip install --upgrade build twine ruff
 python -m unittest discover -s tests -v
 ruff check .
-relay_release_version=0.7.0  # Set the intended release version; must match __version__.
+relay_release_version=0.7.1  # Set the intended release version; must match __version__.
 python scripts/build_pypi.py --tag "v${relay_release_version}"
 python scripts/build_zipapp.py
 ```

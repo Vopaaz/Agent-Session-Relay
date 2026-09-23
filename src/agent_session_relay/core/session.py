@@ -213,6 +213,7 @@ class Relay:
             "full_context": not continuing and not any(
                 previous.get("owner") == turn.get("owner") for previous in session["turns"][:-1]
             ),
+            "has_prior_turns": len(session["turns"]) > 1,
             "human_stats": human_stats,
             "reviewed_stats": reviewed_stats,
         }

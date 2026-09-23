@@ -54,6 +54,10 @@ relay message --repo cdk -m "Configure cancellation events"  # optional message 
 relay finish                                      # all members must be fully reviewed
 ```
 
+Finish always prefers per-repository messages. Members without one use the shared message;
+`finish -m` replaces only that shared message. If every member has its own message, no shared message
+is required. Otherwise, finish opens one editor only when the shared message is missing.
+
 Diff output paths are workspace-relative; path filters after `--` remain relative to cwd. From
 `parent`, use `relay agent diff pending --repo service -- service/src/order.ts`; inside `service`,
 use `relay agent diff pending -- src/order.ts`. An unfiltered diff covers all members in either case.
@@ -216,7 +220,9 @@ from Relay's review state, semantic diffs, status, and subsequent handoffs. If n
 underlying snapshots through `relay agent git`. Suspend/resume preserves these Git objects and any
 pending btw selection; finish/abort deletes them with the session.
 
-Versions 0.3.0 through 0.7.0 share per-worktree schema 2, so existing sessions need no migration.
+Versions 0.3.0 through 0.7.1 share per-worktree schema 2, so existing sessions need no migration.
+For reliable snapshots of rapid edits, corrected workspace message precedence, and guidance for new
+conversations taking over existing work, see the [v0.7.1 release notes](docs/releases/v0.7.1.md).
 For multi-repository sessions and smaller hook context, see the
 [v0.7.0 release notes](docs/releases/v0.7.0.md).
 For the btw commands and status fields removed in v0.6.0,

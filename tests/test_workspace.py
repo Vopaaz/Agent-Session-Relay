@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from agent_session_relay.core.errors import RelayError
 from agent_session_relay.core.session import Relay
@@ -68,6 +68,7 @@ class WorkspaceWorkflowTests(WorkspaceTest):
         owner = {"session_id": "first"}
         first = self.hook("prompt-submit", owner).stdout
         self.assertIn("Relay coordinates code review", first)
+        self.assertNotIn("You are taking over", first)
         self.assertIn('"r2"', first)
         self.hook("agent-stop", owner)
         (self.other / "Config.kt").write_text("human change\nsecond line\n")
@@ -76,6 +77,7 @@ class WorkspaceWorkflowTests(WorkspaceTest):
             cwd=self.other / "subdir",
         ).stdout
         self.assertNotIn("Relay coordinates code review", brief)
+        self.assertNotIn("You are taking over", brief)
         self.assertNotIn("Repositories (", brief)
         self.assertIn("Do not run Git directly", brief)
         self.assertEqual(injected_stats(brief, "Human"), {"r2/Config.kt": (2, 1)})
@@ -86,6 +88,8 @@ class WorkspaceWorkflowTests(WorkspaceTest):
             "kiro", "hook", "prompt-submit", input='{"session_id":"new"}',
         ).stdout
         self.assertIn("Relay coordinates code review", new)
+        self.assertEqual(new.count("You are taking over a Relay session"), 1)
+        self.assertIn("relay agent diff session --stat", new)
         self.assertIn('"r1"', new)
         self.assertIn('"r2"', new)
 
@@ -376,6 +380,71 @@ class WorkspaceWorkflowTests(WorkspaceTest):
         selected = self.ws("agent", "diff", "pending", "--", "r2/[literal].txt").stdout
         self.assertIn("+literal", selected)
         self.assertNotIn("binary.dat", selected)
+
+
+class WorkspaceMessageTests(WorkspaceTest):
+    def setUp(self):
+        super().setUp()
+        self.start(message=None)
+        for repo in (self.repo, self.other):
+            (repo / "Token.kt").write_text("reviewed token changes\n")
+            self.git("add", "Token.kt", cwd=repo)
+
+    def assert_result_messages(self, first, second):
+        for repo, message in ((self.repo, first), (self.other, second)):
+            self.assertEqual(self.git("log", "-1", "--format=%B", cwd=repo).rstrip("\n"), message)
+            self.assertEqual(
+                self.git("rev-list", "--parents", "-n", "1", "HEAD", cwd=repo).split()[1:],
+                [self.base],
+            )
+            self.assertEqual(self.git("status", "--porcelain", cwd=repo), "")
+        self.assertFalse(self.state()["active"])
+
+    def test_finish_with_all_member_messages_needs_no_shared_message_or_editor(self):
+        self.ws("message", "--repo", "r1", "-m", "Refine token parsing")
+        self.ws("message", "--repo", "r2", "-m", "Update token configuration")
+        self.assertIsNone(self.group()["message"])
+        self.git("config", "commit.template", "missing-template.txt")
+        self.ws("finish", cwd=self.other / "subdir")
+        self.assert_result_messages("Refine token parsing", "Update token configuration")
+
+    def test_finish_explicit_shared_message_preserves_member_override(self):
+        self.ws("message", "-m", "Original shared description")
+        self.ws("message", "--repo", "r1", "-m", "Refine token parsing")
+        self.ws("finish", "-m", "Shared final description", "-m", "Explain the result.")
+        self.assert_result_messages(
+            "Refine token parsing", "Shared final description\n\nExplain the result."
+        )
+
+    def test_finish_uses_saved_shared_message_only_for_members_without_overrides(self):
+        self.ws("message", "--repo", "r1", "-m", "Refine token parsing")
+        self.ws("message", "-m", "Shared description", cwd=self.other)
+        self.ws("finish")
+        self.assert_result_messages("Refine token parsing", "Shared description")
+
+    def test_finish_edits_shared_message_once_when_all_messages_are_missing(self):
+        editor = Mock(return_value="Edited shared description")
+        self.workspace().finish(editor=editor)
+        editor.assert_called_once_with(None)
+        self.assert_result_messages("Edited shared description", "Edited shared description")
+
+    def test_finish_edited_shared_message_preserves_member_override(self):
+        self.ws("message", "--repo", "r1", "-m", "Refine token parsing")
+        editor = Mock(return_value="Edited shared description")
+        self.workspace().finish(editor=editor)
+        editor.assert_called_once_with(None)
+        self.assert_result_messages("Refine token parsing", "Edited shared description")
+
+    def test_finish_missing_shared_message_without_editor_leaves_all_members_untouched(self):
+        self.ws("message", "--repo", "r1", "-m", "Refine token parsing")
+        before = copy.deepcopy(self.group())
+        refs = {repo: self.git("for-each-ref", cwd=repo) for repo in (self.repo, self.other)}
+        with self.assertRaisesRegex(RelayError, "message is required"):
+            self.workspace().finish()
+        self.assertEqual(self.group(), before)
+        for repo in (self.repo, self.other):
+            self.assertEqual(self.git("for-each-ref", cwd=repo), refs[repo])
+            self.assertEqual(self.git("show", ":Token.kt", cwd=repo), "reviewed token changes\n")
 
 
 class WorkspaceRecoveryTests(WorkspaceTest):

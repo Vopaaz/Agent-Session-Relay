@@ -141,6 +141,11 @@ keep previously captured project files in scope even after ignore rules change. 
 symlink, executable-bit, ignore, and attribute semantics. Git hooks and external diff/textconv drivers
 are not run by Relay; ordinary clean/smudge filters still apply.
 
+Index copies preserve the source file's timestamp so Git still detects same-size edits made within
+the filesystem's timestamp resolution. Restored raw index blobs have no original file timestamp;
+Relay assigns an old, nonzero mtime so Git rechecks potentially racy entries against their contents.
+The index bytes, staged blobs, and intent-to-add entries remain intact.
+
 Agent history queries use `core/readonly_git.py`, separately from Relay's internal Git plumbing.
 `relay agent git` validates explicit command/option forms before starting Git, preserves the
 caller's cwd and streams, and does not acquire a Relay lock or create session state. Its allowlist
@@ -225,8 +230,10 @@ two-tree update to restore the origin. This removes only captured project additi
 restores the saved index separately from W.
 
 Finish requires W = I and a non-empty custom message. An explicit `finish -m` overrides the saved
-session message.
-Without an explicit or saved message, the human CLI opens the configured Git editor and requires
+session message. In a multi-repository workspace, it replaces only the shared message for that
+finish; per-member overrides always take priority. A shared message is required only if a member
+has no override, so finish skips editing when every member already has its own message.
+If a required message is still missing, the human CLI opens the configured Git editor and requires
 a valid custom message; an empty message, unchanged template, or editor failure cancels finish.
 The full subject/body becomes the public commit message. Finish creates `commit-tree(I, parent=B)`,
 creates a result branch using an atomic create-only ref update, switches to it, and removes the

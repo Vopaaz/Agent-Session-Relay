@@ -111,6 +111,11 @@ class Git:
             with lock.open("xb") as stream:
                 stream.write(contents)
                 stream.flush()
+                # Saved index bytes do not carry the file's original timestamp. An old,
+                # nonzero mtime keeps Git's racy-entry content checks enabled after restore.
+                # Zero would disable those checks; changing the bytes would lose raw-index
+                # fidelity (including intent-to-add and cached staging information).
+                os.utime(stream.fileno(), (1, 1))
                 os.fsync(stream.fileno())
             if contents:
                 os.replace(lock, path)
@@ -175,9 +180,18 @@ class Git:
     def temporary_index(self):
         with tempfile.TemporaryDirectory(prefix="relay-index-") as directory:
             path = Path(directory) / "index"
-            contents = self.index_bytes()
-            if contents:
-                path.write_bytes(contents)
+            try:
+                with self.index_path().open("rb") as source:
+                    contents = source.read()
+                    index_stat = os.fstat(source.fileno())
+            except FileNotFoundError:
+                pass
+            else:
+                if contents:
+                    path.write_bytes(contents)
+                    # A fresh timestamp would make racily clean entries appear safely old,
+                    # hiding same-size edits. Read bytes and timestamps from the same inode.
+                    os.utime(path, ns=(index_stat.st_atime_ns, index_stat.st_mtime_ns))
             env = {"GIT_INDEX_FILE": str(path)}
             # Expand split indexes so saved index blobs don't depend on sharedindex.* lifetimes.
             self.run("update-index", "--no-split-index", env=env)

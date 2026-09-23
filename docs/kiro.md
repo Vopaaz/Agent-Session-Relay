@@ -53,6 +53,8 @@ Later interactions receive only the active-session marker, Git/Relay control res
 the unstaged-edit or read-only reminder. A new conversation receives the introduction again;
 suspend/resume and changing cwd within a multi-repository workspace do not reset this history.
 Without `session_id`, all prompts share one introduction per Relay session.
+When a new conversation joins after earlier turns, its full introduction also recommends running
+`relay agent diff session --stat` before making changes to understand the session's cumulative work.
 
 Each new normal turn still includes fresh per-file stats, separately labeled `Approved this turn`
 and `Human edits at turn start`. These compare the saved `reviewed` and `human` baselines, with
