@@ -16,7 +16,7 @@ from tests.support import SOURCE, RepositoryTest, injected_stats
 class WorkspaceTest(RepositoryTest):
     def setUp(self):
         super().setUp()
-        self.parent = Path(self.temporary.name)
+        self.parent = Path(self.temporary.name).resolve()
         renamed = self.parent / "r1"
         self.repo.rename(renamed)
         self.repo = renamed
@@ -458,7 +458,8 @@ class WorkspaceRecoveryTests(WorkspaceTest):
         original = Relay.suspend
 
         def fail_second(relay):
-            if relay.git.root == self.other:
+            # Git canonicalizes macOS /var to /private/var, as well as other symlink roots.
+            if relay.git.root == self.other.resolve():
                 raise OSError("second member failed")
             return original(relay)
 
@@ -474,6 +475,14 @@ class WorkspaceRecoveryTests(WorkspaceTest):
             self.assertEqual((repo / "Token.kt").read_text(), "unstaged\n")
         self.assertFalse((self.parent / ".relay/transaction.json").exists())
         self.ws("suspend")
+
+    def test_second_member_failure_through_a_symlink_still_rolls_back_all_members(self):
+        alias = self.parent / "workspace-alias"
+        alias.symlink_to(self.parent, target_is_directory=True)
+        self.parent = alias
+        self.repo = alias / "r1"
+        self.other = alias / "r2"
+        self.test_failure_in_second_member_restores_first_member_and_all_staging()
 
     def test_crash_mid_finish_preserves_later_edits_and_all_provenance_through_gc(self):
         self.start()

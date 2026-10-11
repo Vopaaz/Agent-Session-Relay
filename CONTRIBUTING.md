@@ -25,7 +25,7 @@ ruff check .
 ```
 
 Tests create disposable repositories in the system temporary directory. They do not install hooks
-in your actual global Kiro configuration or modify your development repository's review state.
+in your actual global harness configuration or modify your development repository's review state.
 The suite covers partial-hunk staging, provenance, binary files, symlinks, intent-to-add, linked
 worktrees, Git GC, lifecycle failures, interrupted-operation recovery, and hook contracts.
 
@@ -41,7 +41,8 @@ worktrees, Git GC, lifecycle failures, interrupted-operation recovery, and hook 
 - Keep mutations recoverable; do not delete a recovery branch during successful abort cleanup.
 - Add behavior tests for consequential Git changes, especially failure paths. Keep both READMEs in sync.
 
-See [architecture](docs/architecture.md), [Kiro integration](docs/kiro.md), and the original
+See [architecture](docs/architecture.md), [Kiro](docs/kiro.md), [Codex](docs/codex.md),
+[Claude Code](docs/claude-code.md), and the original
 [implementation requirements](docs/requirements.md). Do not test destructive workflows in a real
 project. The tool guard is a workflow aid, not a security boundary against arbitrary executable code.
 
@@ -58,7 +59,7 @@ python3 -m venv .venv
 python -m pip install --upgrade build twine ruff
 python -m unittest discover -s tests -v
 ruff check .
-relay_release_version=0.7.1  # Set the intended release version; must match __version__.
+relay_release_version=0.8.0  # Set the intended release version; must match __version__.
 python scripts/build_pypi.py --tag "v${relay_release_version}"
 python scripts/build_zipapp.py
 ```

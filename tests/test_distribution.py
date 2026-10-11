@@ -70,3 +70,26 @@ class DistributionTests(RepositoryTest):
         denied = self.packed("agent", "git", "branch", "unexpected", ok=False)
         self.assertIn("Only supported read-only Git queries", denied.stderr)
         self.assertEqual(self.git("branch", "--list", "unexpected"), "")
+
+    def check_native_adapter(self, harness):
+        self.packed("start", "-m", f"Update token handling through {harness}")
+        payload = '{"session_id":"standalone-conversation"}'
+        result = self.packed(harness, "hook", "prompt-submit", input=payload)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("Agent-Session-Relay active", context)
+        denied = self.packed(harness, "hook", "pre-tool-use", ok=False, input=json.dumps({
+            "tool_name": "Bash", "tool_input": {"command": "git status"},
+        }))
+        self.assertEqual(denied.returncode, 2)
+        self.write("Token.kt", "native standalone proposal\n")
+        self.packed(harness, "hook", "agent-stop", input=payload)
+        self.git("add", "Token.kt")
+        self.packed("finish")
+        self.assert_one_commit("HEAD")
+        self.assert_clean()
+
+    def test_standalone_archive_includes_codex_adapter(self):
+        self.check_native_adapter("codex")
+
+    def test_standalone_archive_includes_claude_code_adapter(self):
+        self.check_native_adapter("claude-code")

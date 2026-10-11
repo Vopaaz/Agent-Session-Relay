@@ -73,7 +73,8 @@ See [multi-repository sessions](docs/workspaces.md) for membership, messages, an
 ## Install
 
 Requires **Python 3.10+**, **Git 2.37+**, and Linux, macOS, or WSL. There are no Python runtime
-dependencies. Kiro IDE 1.x / CLI 3.x is the first supported harness.
+dependencies. Supported harnesses are Kiro IDE 1.x / CLI 3.x, Codex with native lifecycle hooks,
+and Claude Code.
 
 Install the published CLI with [pipx](https://pipx.pypa.io/):
 
@@ -105,6 +106,36 @@ environment. Contributors can use `./relay` directly.
 
 Configure Git's `user.name` and `user.email` before finishing a session; the final public commit uses
 your normal Git identity. Internal snapshots and abort recovery also work without that identity.
+
+## Codex and Claude Code integration
+
+Choose your harness and one installation scope:
+
+```bash
+relay codex install --global
+relay claude-code install --global
+# Or install for the current Git repository:
+relay codex install --project
+relay claude-code install --project
+```
+
+| Harness | Global file | Project file |
+| --- | --- | --- |
+| Codex | `~/.codex/hooks.json` (respects `CODEX_HOME`) | `<repository>/.codex/hooks.json` |
+| Claude Code | `~/.claude/settings.json` (respects `CLAUDE_CONFIG_DIR`) | `<repository>/.claude/settings.json` |
+
+Installation merges the Relay handlers while preserving other hooks and settings. It is idempotent;
+`--force` replaces only customized Relay entries. `relay claude` is an alias for `relay claude-code`.
+Ensure `relay` is on the harness's PATH and open a new harness session. In Codex, open `/hooks` and
+review/trust the installed hooks; project configuration must also be trusted. Use a current Codex
+with native command hooks, rather than an older notify-only version. Commit project configuration
+before `relay start`. Global installation is recommended for a multi-repository workspace parent.
+
+Both adapters connect `UserPromptSubmit`, `Stop`, and `PreToolUse` to the existing review workflow,
+including BTW restoration and multi-repository coordination. With no active Relay session, hooks
+are silent and inert. After manually interrupting the agent, run `relay end-interrupted-agent-turn`
+before human review. See [Codex setup and smoke test](docs/codex.md),
+[Claude Code setup and smoke test](docs/claude-code.md), and [v0.8.0 release notes](docs/releases/v0.8.0.md).
 
 ## Kiro integration
 
@@ -175,7 +206,7 @@ committing, stashing, or rewriting history.
 
 ## After manually interrupting the agent
 
-If Stop did not run, submitting another prompt in the same Kiro conversation continues the open
+If Stop did not run, submitting another prompt in the same agent conversation continues the open
 Relay turn. The hook reminds the agent that reviewed/human diffs still refer to the original handoff.
 The turn number, review baselines, workspace, and index stay intact; old stats are not announced again.
 Repeated hook delivery uses the same continuation notice and preserves the same state.
@@ -199,7 +230,7 @@ interrupted Relay transaction, not a missing Agent Stop.
 
 ## Ask a side question with btw
 
-While partway through review, run `relay btw` and send your question in Kiro. It selects **only the
+While partway through review, run `relay btw` and send your question in your harness. It selects **only the
 next turn**; `relay status` shows the current and next modes. Run `relay btw --cancel` before sending
 the prompt to cancel. Each later prompt is normal unless you select btw again.
 
@@ -220,7 +251,9 @@ from Relay's review state, semantic diffs, status, and subsequent handoffs. If n
 underlying snapshots through `relay agent git`. Suspend/resume preserves these Git objects and any
 pending btw selection; finish/abort deletes them with the session.
 
-Versions 0.3.0 through 0.7.1 share per-worktree schema 2, so existing sessions need no migration.
+Versions 0.3.0 through 0.8.0 share per-worktree schema 2, so existing sessions need no migration.
+For Codex and Claude Code support and the macOS CI repair, see the
+[v0.8.0 release notes](docs/releases/v0.8.0.md).
 For reliable snapshots of rapid edits, corrected workspace message precedence, and guidance for new
 conversations taking over existing work, see the [v0.7.1 release notes](docs/releases/v0.7.1.md).
 For multi-repository sessions and smaller hook context, see the
@@ -343,7 +376,7 @@ A --- B --- C
 relay start
 ```
 
-The immutable base is now `C`. Send this prompt in Kiro:
+The immutable base is now `C`. Send this prompt in your configured harness:
 
 > Refactor the parser and move token configuration into the new config model.
 
@@ -512,7 +545,12 @@ src/agent_session_relay/
     session.py              Review lifecycle and provenance baselines
   integrations/
     protocol.py             Initial instructions and brief reminders with change stats
-    kiro/                   Installation, lifecycle adapter, shell/Git guard
+    hooks.py                Shared lifecycle dispatch and harness output formats
+    json_hooks.py           Preserve and merge native JSON hook configuration
+    guard.py, readonly.py   Shared shell/Git and BTW write guards
+    kiro/                   Kiro standalone v1 hook installation
+    codex/                  Codex hooks.json integration
+    claude_code/            Claude Code settings.json integration
 docs/                       Requirements, architecture, integration contract
 tests/                      Real Git workflow and adapter tests
 ```
@@ -523,8 +561,8 @@ Mutations are locked and journaled; ordinary failures roll back. If a process is
 `relay recover` first preserves the current code in `relay/recovered/<id>`, then restores the prior
 review state. Do not edit files or run other Git operations during a lifecycle command.
 
-Kiro IDE 1.x / CLI 3.x is implemented. Codex, Claude Code, and other harnesses can add adapters using
-the same core; they are not shipped as supported integrations in this release. The command guard
+Kiro IDE 1.x / CLI 3.x, Codex, and Claude Code share the same core. Other harnesses can add adapters
+under `integrations/<harness>/`. The command guard
 covers ordinary Git invocations, wrappers, and common shell substitutions; it is not a security
 sandbox for arbitrary programs.
 

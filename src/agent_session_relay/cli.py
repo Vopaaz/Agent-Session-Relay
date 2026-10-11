@@ -11,8 +11,15 @@ from .core.readonly_git import COMMANDS
 from .core.readonly_git import run as run_readonly_git
 from .core.workspace import Workspace, discover, find_workspace
 from .editor import edit_message
-from .integrations.kiro.adapter import install, run_hook
+from .integrations.claude_code import adapter as claude_code
+from .integrations.codex import adapter as codex
+from .integrations.kiro import adapter as kiro
 from .integrations.protocol import stop_notice
+
+HARNESSES = {
+    "kiro": ("Kiro", kiro), "codex": ("Codex", codex),
+    "claude-code": ("Claude Code", claude_code),
+}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -133,17 +140,21 @@ def parser() -> argparse.ArgumentParser:
     output.add_argument("--name-only", action="store_true", help="only output involved file names")
     output.add_argument("--stat", action="store_true", help="show per-file change statistics")
     diff.add_argument("-z", "--null", action="store_true", help="NUL delimit --name-only output")
-    kiro = commands.add_parser("kiro", help="Kiro integration")
-    kiro_commands = kiro.add_subparsers(dest="kiro_command", required=True)
-    installer = kiro_commands.add_parser("install", help="install standalone Kiro lifecycle hooks")
-    scope = installer.add_mutually_exclusive_group(required=True)
-    scope.add_argument("--global", dest="global_scope", action="store_true")
-    scope.add_argument("--project", action="store_true")
-    installer.add_argument(
-        "--force", action="store_true", help="replace customized Relay hook configuration"
-    )
-    hook = kiro_commands.add_parser("hook", help="adapter entry point called by Kiro")
-    hook.add_argument("event", choices=("prompt-submit", "agent-stop", "pre-tool-use"))
+    for name, (label, _) in HARNESSES.items():
+        integration = commands.add_parser(
+            name, aliases=["claude"] if name == "claude-code" else [], help=f"{label} integration",
+        )
+        integration.set_defaults(harness=name)
+        integration_commands = integration.add_subparsers(dest="integration_command", required=True)
+        installer = integration_commands.add_parser("install", help=f"install {label} hooks")
+        scope = installer.add_mutually_exclusive_group(required=True)
+        scope.add_argument("--global", dest="global_scope", action="store_true")
+        scope.add_argument("--project", action="store_true")
+        installer.add_argument(
+            "--force", action="store_true", help="replace customized Relay hook entries",
+        )
+        hook = integration_commands.add_parser("hook", help=f"hook entry point called by {label}")
+        hook.add_argument("event", choices=("prompt-submit", "agent-stop", "pre-tool-use"))
     return root
 
 
@@ -181,15 +192,18 @@ def confirm_abort(session_id: str, branches: dict | None = None) -> bool:
 
 
 def execute(args, paths: list[str]) -> int:
-    if args.command == "kiro":
-        if args.kiro_command == "hook":
-            return run_hook(args.event)
-        path = install(global_scope=args.global_scope, force=args.force)
+    if getattr(args, "harness", None):
+        label, adapter = HARNESSES[args.harness]
+        if args.integration_command == "hook":
+            return adapter.run_hook(args.event)
+        path = adapter.install(global_scope=args.global_scope, force=args.force)
         print(
-            f"Kiro integration installed at {path}\n"
-            "Ensure `relay` is on Kiro's PATH and open a new Kiro session.\n"
+            f"{label} integration installed at {path}\n"
+            f"Ensure `relay` is on {label}'s PATH and open a new {label} session.\n"
             "Without an active Relay session, these hooks are silent and inert."
         )
+        if args.harness == "codex":
+            print("In Codex, open /hooks and review/trust the installed Relay hooks.")
         if args.project:
             print("Commit the project hook file before `relay start`, or install globally instead.")
         return 0
@@ -222,7 +236,8 @@ def execute(args, paths: list[str]) -> int:
         print(
             f"Relay session started: {session['id']}\nBase: {session['base_commit']}\n"
             f"Message: {message_subject(session['message'])}\n"
-            "Review with normal Git staging; send a prompt in Kiro to hand off to the agent."
+            "Review with normal Git staging; send a prompt in your harness "
+            "to hand off to the agent."
         )
     elif args.command == "end-interrupted-agent-turn":
         sys.stdout.write(stop_notice(relay.stop(require_open=True)))
@@ -463,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except (RelayError, OSError) as exc:
         print(f"relay: {exc}", file=sys.stderr)
-        return 2 if args.command == "kiro" and args.kiro_command == "hook" else 1
+        return 2 if getattr(args, "integration_command", None) == "hook" else 1
     except KeyboardInterrupt:
         print(
             "\nrelay: interrupted; any incomplete transition can be restored with `relay recover`.",

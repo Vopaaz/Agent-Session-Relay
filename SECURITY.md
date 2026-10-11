@@ -6,10 +6,10 @@ Report vulnerabilities using
 [GitHub private vulnerability reporting](https://github.com/Vopaaz/Agent-Session-Relay/security/advisories/new).
 If private reporting is unavailable, contact a maintainer privately through their GitHub profile.
 Do not put exploit details or private repository contents in a public issue. Include the Relay, Git,
-Python, operating system, and Kiro versions, impact, and a reproduction in a disposable repository.
+Python, operating system, and agent harness versions, impact, and a disposable-repository reproduction.
 
 Relay is a local workflow tool. It does not send repository contents, prompts, or metadata to a remote
-service. Its Kiro adapter does not store prompt text. Hooks send the mode-specific protocol and,
+service. Its adapters do not store prompt text. Hooks send the mode-specific protocol and,
 on normal turns, human-changed file names to the active agent. Inspection output may become part
 of that agent's conversation as with ordinary code tools.
 

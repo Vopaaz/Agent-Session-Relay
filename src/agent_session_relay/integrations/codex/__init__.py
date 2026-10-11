@@ -1,0 +1,1 @@
+"""Codex lifecycle hook integration."""

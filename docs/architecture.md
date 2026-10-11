@@ -264,7 +264,7 @@ Git mutations may still require inspecting the retained journal and snapshots.
 
 Relay locking coordinates Relay processes; it does not lock out editors or Git UIs. Wait for the
 agent to stop before human review and do not run concurrent file/Git mutations during a lifecycle
-command. A second Kiro conversation cannot acquire an agent turn owned by another conversation.
+command. A second agent conversation cannot acquire an agent turn owned by another conversation.
 Duplicate prompt events during the same open turn preserve its original provenance.
 
 ## Adapter boundary
@@ -277,5 +277,13 @@ across suspend/resume; missing owners share one fallback introduction. No additi
 event state is needed. The core does not read prompt text or call an agent API. New adapters belong
 under `integrations/<harness>/`.
 
-Kiro is implemented; other harnesses are extension points. The shell parser is a workflow guard,
-not a general interpreter or security sandbox. See [Kiro](kiro.md) and [SECURITY.md](../SECURITY.md).
+Kiro, Codex, and Claude Code use the shared dispatcher in `integrations/hooks.py` and the shared
+shell/write guards. Kiro keeps its standalone v1 configuration and plain-text output. Codex and
+Claude Code merge command hooks into their native JSON configuration, inject structured prompt
+context, and emit BTW restoration notices as `systemMessage` JSON at Stop. Their conversation IDs
+are prefixed by harness so matching IDs in different harnesses cannot acquire each other's turn;
+legacy Kiro owner IDs are preserved. Child tool calls remain guarded; child lifecycle events do
+not close a parent turn. No `SubagentStop` or automatic interruption cleanup is installed.
+
+The shell parser is a workflow guard, not a general interpreter or security sandbox. See
+[Kiro](kiro.md), [Codex](codex.md), [Claude Code](claude-code.md), and [SECURITY.md](../SECURITY.md).

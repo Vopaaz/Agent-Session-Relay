@@ -68,7 +68,7 @@ Finish 为每个有净修改的仓库生成一个结果 commit，parent 为该�
 ## 安装
 
 需要 **Python 3.10+**、**Git 2.37+**，以及 Linux、macOS 或 WSL。Python 运行时没有第三方依赖。
-首个支持的 harness 是 Kiro IDE 1.x / CLI 3.x。
+支持 Kiro IDE 1.x / CLI 3.x、提供原生生命周期 hooks 的 Codex，以及 Claude Code。
 
 默认使用 [pipx](https://pipx.pypa.io/) 安装已发布的 CLI：
 
@@ -100,6 +100,35 @@ relay --version
 
 Finish 前请配置 Git 的 `user.name` 和 `user.email`，最终公开 commit 使用你的正常 Git 身份。
 内部快照和 abort recovery 在未配置该身份时也可以创建。
+
+## Codex 和 Claude Code 接入
+
+选择需要的 harness 和一个安装范围：
+
+```bash
+relay codex install --global
+relay claude-code install --global
+# 或者，在目标 Git 仓库内安装项目级配置：
+relay codex install --project
+relay claude-code install --project
+```
+
+| Harness | 全局配置 | 项目配置 |
+| --- | --- | --- |
+| Codex | `~/.codex/hooks.json`（遵循 `CODEX_HOME`） | `<仓库>/.codex/hooks.json` |
+| Claude Code | `~/.claude/settings.json`（遵循 `CLAUDE_CONFIG_DIR`） | `<仓库>/.claude/settings.json` |
+
+安装会合并 Relay handlers，保留其他 hooks 和设置。相同配置重复安装不会重写文件；
+`--force` 只替换自定义过的 Relay 条目。`relay claude` 是 `relay claude-code` 的别名。
+确认 harness 的 PATH 能找到 `relay`，再开启新会话。Codex 中需要打开 `/hooks` 审查并信任
+Relay hooks，项目配置也需要项目被信任。请使用提供原生命令 hooks 的当前 Codex，旧版只有
+`notify` 的版本不适用。项目配置先提交再 `relay start`；多仓库父目录推荐使用全局安装。
+
+两个 adapter 都通过 `UserPromptSubmit`、`Stop` 和 `PreToolUse` 接入现有 review 流程，
+包括 BTW 恢复和多仓库协调。没有 active Relay session 时静默且不产生副作用。
+手动中断 agent 后，在开始 review 前执行 `relay end-interrupted-agent-turn`。
+详见 [Codex 安装与验收](docs/codex.md)、[Claude Code 安装与验收](docs/claude-code.md) 和
+[v0.8.0 release notes](docs/releases/v0.8.0.md)。
 
 ## Kiro 接入
 
@@ -167,7 +196,7 @@ Active 期间，用户使用 Git staging/discard；切分支、commit、stash �
 
 ## 手动中断 Agent 后
 
-如果 Stop 没有执行，在同一 Kiro 会话直接提交下一条 prompt 会续接尚未关闭的 Relay turn。
+如果 Stop 没有执行，在同一 agent 会话直接提交下一条 prompt 会续接尚未关闭的 Relay turn。
 Hook 会提醒 reviewed/human diff 仍来自原 handoff；轮次、review 基线、工作区和 index 均保持原样，
 不再次注入原有的审批和人类修改统计。重复 hook 也使用这份续接提示，不改变已有状态。
 
@@ -187,7 +216,7 @@ relay end-interrupted-agent-turn
 
 ## 用 btw 临时插问
 
-Review 到一半时，执行 `relay btw`，再在 Kiro 中发送问题。它**只对下一轮生效**；
+Review 到一半时，执行 `relay btw`，再在所用 harness 中发送问题。它**只对下一轮生效**；
 `relay status` 显示当前与下一轮模式。发送前可用 `relay btw --cancel` 取消。
 此后的新 prompt 自动恢复普通模式，除非你再次选择 btw。
 
@@ -205,7 +234,8 @@ Btw 仅提供 `relay btw` 和 `relay btw --cancel` 两个操作。紧急快照�
 review 状态、语义 diff、status 和后续 handoff 之外；需要时可通过 `relay agent git` 查看底层快照。
 Suspend/resume 保留这些 Git 对象和下一轮 btw 选择，finish/abort 随 session 统一清理。
 
-v0.3.0 至 v0.7.1 共用 worktree schema 2，已有 session 无需迁移。
+v0.3.0 至 v0.8.0 共用 worktree schema 2，已有 session 无需迁移。
+Codex、Claude Code 支持和 macOS CI 修复见 [v0.8.0 release notes](docs/releases/v0.8.0.md)。
 快速编辑的快照漏检修复、多仓库消息优先级修正和新会话接手提示见
 [v0.7.1 release notes](docs/releases/v0.7.1.md)。
 多仓库 session 和精简 hook 上下文见 [v0.7.0 release notes](docs/releases/v0.7.0.md)。
@@ -319,7 +349,7 @@ A --- B --- C
 relay start
 ```
 
-Session 的 immutable base 为 `C`。在 Kiro 中发送：
+Session 的 immutable base 为 `C`。在已配置的 harness 中发送：
 
 > Refactor the parser and move token configuration into the new config model.
 
@@ -481,7 +511,12 @@ src/agent_session_relay/
     session.py              Review 生命周期与 provenance baselines
   integrations/
     protocol.py             首次完整说明、后续简短提醒与改动统计
-    kiro/                   安装、生命周期适配与 shell/Git guard
+    hooks.py                共享生命周期调度与 harness 输出格式
+    json_hooks.py           保留并合并原生 JSON hook 配置
+    guard.py, readonly.py   共享 shell/Git 与 BTW 写入 guard
+    kiro/                   Kiro 独立 v1 hook 安装
+    codex/                  Codex hooks.json 接入
+    claude_code/            Claude Code settings.json 接入
 docs/                       需求、架构、接入规则
 tests/                      真实 Git 工作流与 adapter 测试
 ```
@@ -492,8 +527,8 @@ tests/                      真实 Git 工作流与 adapter 测试
 会先将当前代码保存到 `relay/recovered/<id>`，再恢复操作前的 review state。
 执行生命周期命令期间，请勿同时编辑文件或运行其他 Git 操作。
 
-本版本实现 Kiro IDE 1.x / CLI 3.x。Codex、Claude Code 等可通过相同 Core 扩展 adapter，目前未随
-本版本提供正式接入。Git guard 覆盖普通 Git 调用、常见 wrappers
+本版本支持 Kiro IDE 1.x / CLI 3.x、Codex 和 Claude Code，三者使用相同 Core。
+其他 harness 可以在 `integrations/<harness>/` 增加 adapter。Git guard 覆盖普通 Git 调用、常见 wrappers
 与 shell substitutions，不是针对任意程序的安全沙箱。
 
 Relay 明确拒绝 sparse checkout、submodules/embedded repositories，以及

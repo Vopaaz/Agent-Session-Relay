@@ -12,7 +12,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{name = "Agent-Session-Relay contributors"}]
 dependencies = []
-keywords = ["git", "code-review", "ai-agent", "kiro", "cli"]
+keywords = ["git", "code-review", "ai-agent", "kiro", "codex", "claude-code", "cli"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",

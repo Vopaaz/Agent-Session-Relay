@@ -233,7 +233,7 @@ class Relay:
                 previous_owner = session["turns"][-1].get("owner")
                 if owner and previous_owner and owner != previous_owner:
                     raise RelayError(
-                        "Another Kiro conversation owns the open agent turn. "
+                        "Another agent conversation owns the open agent turn. "
                         "Wait for its Agent Stop hook before starting a new turn."
                     )
                 # Prompt retries / hooks installed at both scopes must not erase provenance.
@@ -299,7 +299,7 @@ class Relay:
                 return None
             turn = session["turns"][-1]
             if owner and turn.get("owner") and owner != turn["owner"]:
-                raise RelayError("This Agent Stop belongs to a different Kiro conversation.")
+                raise RelayError("This Agent Stop belongs to a different agent conversation.")
             workspace = self.workspace_tree(session)
             snapshots = None
             with self.store.transaction(state, session["id"], "agent-stop", workspace):

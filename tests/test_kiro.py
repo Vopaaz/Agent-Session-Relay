@@ -270,7 +270,7 @@ class KiroHookTests(RepositoryTest):
             result = self.run_relay("kiro", "hook", "prompt-submit", input=payload, cwd=outside)
             self.assertIn("Agent-Session-Relay active", result.stdout)
         self.assertIn(
-            "Another Kiro conversation",
+            "Another agent conversation",
             self.hook("prompt-submit", {"session_id": "conversation-b"}, ok=False).stderr,
         )
         self.hook("agent-stop", {"session_id": "conversation-b"}, ok=False)

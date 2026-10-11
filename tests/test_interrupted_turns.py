@@ -58,7 +58,7 @@ class InterruptedTurnTests(RepositoryTest):
             self.assertEqual(self.run_relay("agent", "diff", kind).stdout, expected)
         self.assertEqual(self.read("Parser.kt"), "partial agent work\n")
 
-        self.assertIn("Another Kiro conversation", self.hook(
+        self.assertIn("Another agent conversation", self.hook(
             "prompt-submit", {"session_id": "conversation-b"}, ok=False,
         ).stderr)
         self.assertEqual(self.review_state(), before)

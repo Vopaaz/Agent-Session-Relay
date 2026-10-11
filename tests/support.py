@@ -37,7 +37,7 @@ class RepositoryTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="relay-test-")
         self.addCleanup(self.temporary.cleanup)
-        self.repo = Path(self.temporary.name) / "repo"
+        self.repo = Path(self.temporary.name).resolve() / "repo"
         self.repo.mkdir()
         self.env = os.environ.copy()
         for key in list(self.env):
