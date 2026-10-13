@@ -71,6 +71,11 @@ class Relay:
             )
         return self.git.workspace_tree(session["reviewed"], previous=previous)
 
+    def has_unstaged_changes(self, workspace: str, approved: str) -> bool:
+        # Recovery snapshots retain captured files even after they become ignored.
+        # Review only the current index plus non-ignored untracked files, as git add does.
+        return workspace != approved and self.git.workspace_tree(approved) != approved
+
     @staticmethod
     def validate_message(message: str) -> str:
         message = message.strip()
@@ -416,7 +421,7 @@ class Relay:
                 self.validate(session)
                 workspace = self.workspace_tree(session)
                 approved = self.git.index_tree()
-                if workspace != approved:
+                if self.has_unstaged_changes(workspace, approved):
                     if expected_session is not None:
                         raise RelayError(
                             "Finish cancelled: pending changes appeared while editing the message. "
@@ -539,7 +544,7 @@ class Relay:
                 "session_changes": workspace != self.git.tree(session["base_commit"]),
                 "pending_changes": workspace != reviewed,
                 "staged_approvals": index != reviewed,
-                "unstaged_changes": workspace != index,
+                "unstaged_changes": self.has_unstaged_changes(workspace, index),
                 "provenance": {
                     "available": turn is not None,
                     "newly_reviewed": bool(

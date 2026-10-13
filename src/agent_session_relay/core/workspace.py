@@ -436,7 +436,7 @@ class Workspace:
         for name, relay in members.items():
             session = relay.active(relay.store.load())
             approved = relay.git.index_tree()
-            if relay.workspace_tree(session) != approved:
+            if relay.has_unstaged_changes(relay.workspace_tree(session), approved):
                 raise RelayError(f"Pending changes remain in {name}. Review and stage them first.")
             changes[name] = approved != relay.git.tree(session["base_commit"])
             if changes[name]:
@@ -472,7 +472,14 @@ class Workspace:
                                     "commit": relay.git.resolve("HEAD"),
                                 }
                             else:
-                                session, origin = relay.suspend()
+                                session = relay.active(relay.store.load())
+                                origin = relay.git.available_origin(session["origin"])
+                                # Ignored historical captures are no longer project files;
+                                # leave them in place when returning an unchanged member.
+                                relay.git.materialize(
+                                    relay.git.index_tree(), relay.git.tree(origin["commit"])
+                                )
+                                relay.git.set_head(origin)
                                 relay.remove_session(relay.store.load(), session)
                                 results[name] = {"branch": None, "origin": origin}
                         del state["sessions"][group["id"]]

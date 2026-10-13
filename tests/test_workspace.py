@@ -183,6 +183,44 @@ class WorkspaceWorkflowTests(WorkspaceTest):
         )
         self.ws("agent", "git", "--repo", "r2", "reset", "--hard", ok=False)
 
+    def test_finish_after_add_all_excludes_previously_captured_ignored_files(self):
+        self.start()
+        self.hook("prompt-submit")
+        self.write("scratch.txt", "temporary output\n")
+        self.hook("agent-stop")
+        self.write(".gitignore", "*.ignored\nscratch.txt\n")
+        self.write("Token.kt", "reviewed token\n")
+        (self.other / "Config.kt").write_text("reviewed config\n")
+        self.git("add", ".")
+        self.git("add", ".", cwd=self.other)
+        approved = {
+            repo: self.git("write-tree", cwd=repo).strip() for repo in (self.repo, self.other)
+        }
+        status = json.loads(self.ws("status", "--json").stdout)
+        self.assertFalse(status["unstaged_changes"])
+        self.ws("finish")
+        for repo, tree in approved.items():
+            self.assertEqual(self.git("rev-parse", "HEAD^{tree}", cwd=repo).strip(), tree)
+            self.assertEqual(self.git("status", "--porcelain", cwd=repo), "")
+        self.assertEqual(self.read("scratch.txt"), "temporary output\n")
+
+    def test_finish_preserves_ignored_captures_in_an_unchanged_member(self):
+        self.start()
+        self.hook("prompt-submit")
+        ignored = self.other / "generated.ignored"
+        ignored.write_text("captured output\n")
+        self.git("add", "-f", "generated.ignored", cwd=self.other)
+        self.hook("agent-stop")
+        self.write("Token.kt", "reviewed token\n")
+        self.git("add", ".")
+        self.git("add", ".", cwd=self.other)
+        self.ws("finish")
+        self.assertEqual(ignored.read_text(), "captured output\n")
+        self.assertEqual(self.git("symbolic-ref", "--short", "HEAD", cwd=self.other), "main\n")
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=self.other).strip(), self.base)
+        self.assertEqual(self.git("branch", "--list", "relay/result/*", cwd=self.other), "")
+        self.assertEqual(self.git("status", "--porcelain", cwd=self.other), "")
+
     def test_finish_requires_all_reviews_and_preserves_per_repo_bases(self):
         # Give the second member a different immutable base.
         (self.other / "independent.txt").write_text("before session\n")

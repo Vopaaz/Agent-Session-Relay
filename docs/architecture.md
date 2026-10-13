@@ -122,7 +122,8 @@ the first handoff, `available` and both change flags are false. Without an activ
 agent sees only `active: false`. Internal identities, human controls, index details, and static
 help are omitted.
 Human `relay status --json` retains full diagnostics, including unsealed approvals
-(`staged_approvals`, I != R) and `unstaged_changes` (W != I). The latter blocks finish when true;
+(`staged_approvals`, I != R) and `unstaged_changes` (the current index plus non-ignored untracked
+files, snapshotted from disk, differs from I). The latter blocks finish when true;
 finish also requires a custom session message.
 The reviewed/human views stay fixed while the agent works; session and pending are live. All views
 support patch output, `--name-only` (optionally `-z`), or `--stat`, with literal path filtering.
@@ -137,7 +138,10 @@ paths without patch content. An approved path may still contain pending hunks.
 Snapshot and diff operations use a temporary index. Snapshotting copies the real index, expands any
 split index, accounts for tracked files removed from the index but still present on disk, stages the
 workspace only in the private index, and writes a tree. R and the latest effective workspace snapshot
-keep previously captured project files in scope even after ignore rules change. Paths and patches stay within Git's binary,
+keep previously captured project files in scope even after ignore rules change. Finish checks and
+`unstaged_changes` instead use I as the snapshot baseline, so previously captured files that are
+now ignored and absent from I do not become phantom unstaged changes. Full recovery snapshots
+still preserve those files. Paths and patches stay within Git's binary,
 symlink, executable-bit, ignore, and attribute semantics. Git hooks and external diff/textconv drivers
 are not run by Relay; ordinary clean/smudge filters still apply.
 

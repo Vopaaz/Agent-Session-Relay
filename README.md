@@ -251,7 +251,9 @@ from Relay's review state, semantic diffs, status, and subsequent handoffs. If n
 underlying snapshots through `relay agent git`. Suspend/resume preserves these Git objects and any
 pending btw selection; finish/abort deletes them with the session.
 
-Versions 0.3.0 through 0.8.0 share per-worktree schema 2, so existing sessions need no migration.
+Versions 0.3.0 through 0.8.1 share per-worktree schema 2, so existing sessions need no migration.
+For the finish check fix after changing ignore rules, see the
+[v0.8.1 release notes](docs/releases/v0.8.1.md).
 For Codex and Claude Code support and the macOS CI repair, see the
 [v0.8.0 release notes](docs/releases/v0.8.0.md).
 For reliable snapshots of rapid edits, corrected workspace message precedence, and guidance for new
@@ -489,8 +491,10 @@ moving or hijacking the branch.
 ## Finish and integrate the result
 
 Finish refuses pending changes. You may stage the last accepted hunks and immediately finish;
-another agent handoff is not required. A custom session message must be saved, supplied with `-m`,
-or entered in the editor that opens when neither is available; there is no generated fallback.
+another agent handoff is not required. This check follows the current index and ignore rules:
+previously captured files that are now ignored and absent from the index do not block finish.
+A custom session message must be saved, supplied with `-m`, or entered in the editor that opens
+when neither is available; there is no generated fallback.
 Even a session with no final code delta produces one result
 commit with that message. Relay switches to `relay/result/<session>` and removes that session's
 internal refs/metadata.

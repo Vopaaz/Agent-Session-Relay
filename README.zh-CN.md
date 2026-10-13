@@ -234,7 +234,8 @@ Btw 仅提供 `relay btw` 和 `relay btw --cancel` 两个操作。紧急快照�
 review 状态、语义 diff、status 和后续 handoff 之外；需要时可通过 `relay agent git` 查看底层快照。
 Suspend/resume 保留这些 Git 对象和下一轮 btw 选择，finish/abort 随 session 统一清理。
 
-v0.3.0 至 v0.8.0 共用 worktree schema 2，已有 session 无需迁移。
+v0.3.0 至 v0.8.1 共用 worktree schema 2，已有 session 无需迁移。
+修改 ignore 规则后的 finish 检查修复见 [v0.8.1 release notes](docs/releases/v0.8.1.md)。
 Codex、Claude Code 支持和 macOS CI 修复见 [v0.8.0 release notes](docs/releases/v0.8.0.md)。
 快速编辑的快照漏检修复、多仓库消息优先级修正和新会话接手提示见
 [v0.7.1 release notes](docs/releases/v0.7.1.md)。
@@ -458,8 +459,9 @@ Suspend / abort 返回原分支的当前 tip。如果原分支被删除或已在
 ## Finish 与结果集成
 
 存在 pending changes 时不能 finish。最后一批 hunks review 通过后，可直接 stage 并 finish，
-不必额外发送一次 prompt。说明可以预先保存、通过 `-m` 当场提供，或在两者都没有时由自动打开的
-编辑器填写，不再生成默认说明。
+不必额外发送一次 prompt。此检查遵循当前 index 和 ignore 规则：先前被快照捕获、现在已被忽略且
+不在 index 中的文件不会阻止 finish。说明可以预先保存、通过 `-m` 当场提供，或在两者都没有时由
+自动打开的编辑器填写，不再生成默认说明。
 即使最终 tree 与 base 相同，也创建一个使用该 message 的结果 commit。
 Relay 切换到 `relay/result/<session>`，清理该 session 的内部 refs 与 metadata。
 
