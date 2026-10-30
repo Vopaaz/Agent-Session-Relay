@@ -251,7 +251,9 @@ from Relay's review state, semantic diffs, status, and subsequent handoffs. If n
 underlying snapshots through `relay agent git`. Suspend/resume preserves these Git objects and any
 pending btw selection; finish/abort deletes them with the session.
 
-Versions 0.3.0 through 0.8.1 share per-worktree schema 2, so existing sessions need no migration.
+Versions 0.3.0 through 0.8.2 share per-worktree schema 2, so existing sessions need no migration.
+For clearer `relay start --repo` path errors, see the
+[v0.8.2 release notes](docs/releases/v0.8.2.md).
 For the finish check fix after changing ignore rules, see the
 [v0.8.1 release notes](docs/releases/v0.8.1.md).
 For Codex and Claude Code support and the macOS CI repair, see the

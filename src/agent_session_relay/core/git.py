@@ -20,7 +20,7 @@ class Git:
             self.root = Path(self.text("rev-parse", "--show-toplevel"))
             self.git_dir = Path(self.text("rev-parse", "--absolute-git-dir"))
         except RelayError as exc:
-            raise RelayError("Run Relay inside a non-bare Git working tree.") from exc
+            raise RelayError(f"Run Relay inside a non-bare Git working tree. {exc}") from exc
 
     def run(
         self, *args: str, data: bytes | None = None, env: dict | None = None, check: bool = True

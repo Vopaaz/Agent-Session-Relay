@@ -387,6 +387,46 @@ class WorkspaceWorkflowTests(WorkspaceTest):
         self.assertFalse((self.parent / ".relay/state.json").exists())
         self.assertEqual((self.other / "dirty.txt").read_text(), "preserve\n")
 
+    def test_invalid_repo_paths_report_the_argument_and_allow_corrected_start(self):
+        (self.parent / "plain").mkdir()
+        (self.parent / "file").write_text("not a directory\n")
+        self.git("init", "--bare", str(self.parent / "bare"), cwd=self.parent)
+        for path, reason in (
+            ("r2_typo", "directory does not exist"),
+            ("./file", "path is not a directory"),
+            ("./plain", "not a git repository"),
+            ("bare", "must be run in a work tree"),
+        ):
+            with self.subTest(path=path):
+                result = self.ws("start", "--repo", "r1", "--repo", path, ok=False)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"relay: Invalid --repo '{path}': ", result.stderr)
+                self.assertIn(reason, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertFalse((self.parent / ".relay/state.json").exists())
+                for repo in (self.repo, self.other):
+                    self.assertEqual(
+                        self.git("symbolic-ref", "--short", "HEAD", cwd=repo).strip(), "main"
+                    )
+                    self.assertEqual(self.git("for-each-ref", "refs/relay/", cwd=repo), "")
+                    self.assertFalse((repo / ".git/agent-session-relay/state.json").exists())
+        self.start()
+        self.assertEqual(set(self.group()["members"]), {"r1", "r2"})
+        self.assertEqual(self.group()["state"], "active")
+
+    def test_repo_git_errors_keep_the_argument_and_underlying_details(self):
+        for error in (
+            RelayError("Git rev-parse failed: fatal: detected dubious ownership in repository"),
+            RelayError("Git rev-parse failed: fatal: cannot open .git: Permission denied"),
+            PermissionError("Permission denied"),
+        ):
+            with self.subTest(error=str(error)):
+                with patch("agent_session_relay.core.git.Git.text", side_effect=error):
+                    with self.assertRaises(RelayError) as caught:
+                        self.workspace().start(repos=["r1", "r2"])
+                self.assertIn("Invalid --repo 'r1': ", str(caught.exception))
+                self.assertIn(str(error), str(caught.exception))
+
     def test_existing_independent_session_cannot_be_enrolled(self):
         self.run_relay("start")
         self.ws("start", "--repo", "r1", "--repo", "r2", ok=False)

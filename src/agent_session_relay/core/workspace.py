@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import stat
 import uuid
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
@@ -199,7 +200,14 @@ class Workspace:
         repositories = []
         roots = []
         for path in paths:
-            git = Git(self.cwd / path)
+            try:
+                if not stat.S_ISDIR((self.cwd / path).stat().st_mode):
+                    raise RelayError("path is not a directory")
+                git = Git(self.cwd / path)
+            except FileNotFoundError as exc:
+                raise RelayError(f"Invalid --repo '{path}': directory does not exist") from exc
+            except (OSError, RelayError) as exc:
+                raise RelayError(f"Invalid --repo '{path}': {exc}") from exc
             root = git.root.resolve()
             if root != (self.cwd / path).resolve():
                 raise RelayError(f"--repo must name a worktree root: {path}")
