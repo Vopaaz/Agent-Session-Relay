@@ -1,3 +1,3 @@
 """Agent-Session-Relay: human review sessions built on Git."""
 
-__version__ = "0.8.2"
+__version__ = "0.9.0"

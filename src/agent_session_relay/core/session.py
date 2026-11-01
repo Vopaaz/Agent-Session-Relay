@@ -17,9 +17,14 @@ def now() -> str:
 
 
 class Relay:
-    def __init__(self, git: Git):
+    def __init__(self, git: Git, *, coordinator: str | None = None):
         self.git = git
         self.store = Store(git)
+        self.coordinator = coordinator
+
+    def check_owner(self, session: dict) -> None:
+        if "coordinator" in session and session["coordinator"] != self.coordinator:
+            raise RelayError("Session coordination changed; retry the Relay command.")
 
     @staticmethod
     def prefix(session: dict) -> str:
@@ -34,6 +39,7 @@ class Relay:
         return None
 
     def validate(self, session: dict) -> None:
+        self.check_owner(session)
         self.git.assert_stable()
         head = self.git.head()
         if head["ref"] is not None or head["commit"] != session["reviewed"]:
@@ -114,6 +120,7 @@ class Relay:
                         "Session ID must match exactly one session. Use `relay list`."
                     )
                 session = candidates[0]
+            self.check_owner(session)
             if message is not None:
                 message = self.validate_message(message)
                 self.write_message(session, message)
@@ -132,6 +139,7 @@ class Relay:
                     "Message editing cancelled: the session ended or its message changed "
                     "while the editor was open. Retry with the current session."
                 )
+            self.check_owner(current)
             self.write_message(current, message)
             return {**current, "message": message}
 
@@ -144,6 +152,7 @@ class Relay:
             return [
                 {**session, "message": self.session_message(session)}
                 for session in self.store.load()["sessions"].values()
+                if session.get("coordinator") == self.coordinator
             ]
 
     def start(self, message: str | None = None, *, session_id: str | None = None) -> dict:
@@ -174,6 +183,7 @@ class Relay:
                 "turn": 0,
                 "turns": [],
                 "last_post": origin["commit"],
+                "coordinator": self.coordinator,
             }
             with self.store.transaction(state, sid, "start", self.git.tree(origin["commit"])):
                 self.git.pin(self.prefix(session) + "base", origin["commit"], create=True)
@@ -221,6 +231,7 @@ class Relay:
             "has_prior_turns": len(session["turns"]) > 1,
             "human_stats": human_stats,
             "reviewed_stats": reviewed_stats,
+            "repository": str(self.git.root),
         }
 
     def handoff(self, owner: str | None = None) -> dict | None:
@@ -386,6 +397,7 @@ class Relay:
             if self.active(state, required=False):
                 raise RelayError("A Relay session is already active; suspend or finish it first.")
             session = self.select_suspended(state, name)
+            self.check_owner(session)
             self.git.assert_clean()
             workspace = self.git.workspace_tree()
             with self.store.transaction(state, session["id"], "resume", workspace):

@@ -63,10 +63,16 @@ Diff output paths are workspace-relative; path filters after `--` remain relativ
 use `relay agent diff pending -- src/order.ts`. An unfiltered diff covers all members in either case.
 
 Finish creates one result commit per changed repository, parented by its own immutable base.
-Unchanged members return to their origin without an empty commit. Result branches share a session ID
-prefix with a member suffix. The common parent's `.relay/` directory records the membership and
-coordination state; subsequent `relay start` commands reuse these members. No environment variable is
-needed. Existing single-repository usage continues to work outside configured workspaces.
+Unchanged members return to their origin without an empty commit. Each result branch uses its
+member session ID. The common parent's `.relay/` directory stores each session's
+own membership and coordination state. New multi-repository sessions specify `--repo` again; plain
+`relay start` starts in the current Git worktree. Suspended sessions retain their original scope.
+
+During the active session's human turn, use `relay repo add ../another-package` to enroll a clean
+Git worktree with an initial commit. Only this session changes. A standalone session automatically
+becomes a multi-repository session rooted at the nearest common parent, preserving its ID, review
+state, and cwd. An existing multi-repository session keeps its root. Every prompt hook includes the
+current scope; all member repositories use the same diff, review, and lifecycle operations.
 
 See [multi-repository sessions](docs/workspaces.md) for membership, messages, and recovery details.
 
@@ -186,6 +192,7 @@ See [integration details and a live smoke test](https://github.com/Vopaaz/Agent-
 | Command | Effect |
 | --- | --- |
 | `relay start [--repo PATH ...] [-m "message"]` | Start from clean, stable worktrees; optionally select multiple repositories and describe the work |
+| `relay repo add PATH` | Add a clean worktree to the active session during its human turn |
 | `relay message [session] [-m "message"]` | Set the session message; omit `-m` to open the Git editor |
 | `relay status` | Show the session message, lifecycle, reviewed checkpoint, staged approvals, and remaining proposals |
 | `relay end-interrupted-agent-turn` | After manually interrupting the agent, close its open turn before human review |

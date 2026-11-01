@@ -7,15 +7,26 @@ an agent SDK. `Git` handles plumbing, `Store` handles durability, and `Relay` ha
 
 ## Workspace coordination
 
-`core/workspace.py` discovers `.relay/` at an explicit common parent. Its schema-1 state holds member
-paths/worktree identities, the active pointer, and logical workspace sessions. Member engines retain
-schema-2 storage in their own Git directories; standalone sessions need no migration. Member IDs
-share the group ID prefix, with distinct suffixes for linked worktrees sharing one object database.
+`core/workspace.py` discovers `.relay/` at a common parent. Its schema-2 state holds the active
+pointer and logical sessions. Each session owns its member paths, worktree identities, and local
+session IDs; there is no workspace-wide member configuration. Member engines retain schema-2
+storage in their own Git directories; standalone sessions need no migration. Member IDs
+use distinct namespaces for linked worktrees sharing one object database. A promoted standalone
+member retains its original ID and refs.
 Discovery from any member returns the whole workspace. Nonmembers remain independent.
 
 Status/diffs aggregate member views. Phase, mode, turn, ownership, and lifecycle stay in step; bases,
-checkpoints, indexes, and snapshots remain independent. One injected protocol includes membership and
-workspace-relative changed paths. Diff filters remain relative to cwd.
+checkpoints, indexes, and snapshots remain independent. Every prompt includes current membership;
+multi-repository changed paths are workspace-relative.
+Adding a member is a human-phase group transaction. A standalone promotion adopts only the active
+session; other suspended sessions stay in their original stores. Discovery and session selection
+combine ancestor coordinator records and standalone records without exposing local member sessions.
+Per-member coordinator pointers record ownership, not another copy of scope, and reject stale
+standalone commands after promotion. New members inherit the turn count and next mode with empty
+local history; conversation introduction history and the latest turn kind belong to the group.
+Diff filters remain relative to cwd. Schema-1 coordinator state and journals are normalized on read
+into session-owned membership; the next successful mutation saves schema 2. Inspection does not
+rewrite legacy metadata or change other sessions.
 
 `MetadataStore` supplies versioned JSON and locks. `Store.prepare()` separates creation of a recovery
 journal from its commit point so the coordinator can prepare every member before invoking existing
@@ -197,7 +208,8 @@ Snapshot commits have B as their parent; checkpoint commits have the previous ch
 Per-turn metadata retains entry/provenance commit IDs and normal-turn output commit IDs. Session IDs
 include UTC time and a random suffix, so multiple worktrees can share the object database/ref namespace
 without sharing an active session. Sessions in another worktree are managed from that worktree.
-State uses schema 2. There is no migration or compatibility reader for sessions from other versions.
+Per-worktree state uses schema 2; other per-worktree schemas are unsupported. Workspace coordinator
+state accepts schema 1 as described above and writes schema 2.
 
 ## Suspend, resume, finish, abort
 

@@ -7,9 +7,11 @@ from pathlib import Path
 
 from . import __version__
 from .core.errors import RelayError
+from .core.git import Git
 from .core.readonly_git import COMMANDS
 from .core.readonly_git import run as run_readonly_git
-from .core.workspace import Workspace, discover, find_workspace
+from .core.session import Relay
+from .core.workspace import Workspace, add_repository, discover, select_session, session_sources
 from .editor import edit_message
 from .integrations.claude_code import adapter as claude_code
 from .integrations.codex import adapter as codex
@@ -42,6 +44,12 @@ def parser() -> argparse.ArgumentParser:
         action="append",
         help="describe the session; repeat for separate paragraphs (no editor at start)",
     )
+    repo = commands.add_parser("repo", help="manage the active session's repositories")
+    repo_commands = repo.add_subparsers(dest="repo_command", required=True)
+    add = repo_commands.add_parser(
+        "add", help="add a clean Git worktree during the active session's human phase",
+    )
+    add.add_argument("path", metavar="PATH", help="worktree root, relative to cwd")
     message = commands.add_parser("message", help="set or replace a session's final commit message")
     message.add_argument(
         "-m",
@@ -218,11 +226,37 @@ def execute(args, paths: list[str]) -> int:
             name = workspace.repository(args.git_args[1])
             return run_readonly_git(args.git_args[2:], cwd=str(workspace.root / name))
         return run_readonly_git(args.git_args)
-    if args.command == "start" and args.repos:
-        workspace = find_workspace(Path.cwd())
-        if workspace is not None and workspace.root != Path.cwd().resolve():
-            raise RelayError(f"Configure workspace members from {workspace.root}.")
-        relay = Workspace(Path.cwd())
+    if args.command == "repo":
+        relay, session = add_repository(args.path)
+        name = relay.repository(args.path, session)
+        print(f"Repository added: {name}\nSession: {session['id']}\nWorkspace: {relay.root}")
+        print("Repositories: " + ", ".join(sorted(session["members"])))
+        return 0
+    if args.command == "list":
+        sources = session_sources()
+        if not sources:
+            discover()  # Retain the normal error outside Git/session directories.
+        sessions = [s for _, s in sources]
+        if args.json:
+            print(json.dumps(sessions, indent=2))
+        elif not sessions:
+            print("No Relay sessions in this directory.")
+        else:
+            for session in sorted(sessions, key=lambda s: s["id"]):
+                print(f"{session['id']}  {session['state']}  turns={session['turn']}  "
+                      f"{message_subject(session['message'])}")
+        return 0
+    if args.command == "start":
+        current = discover(required=False)
+        if current is not None:
+            current.store.assert_ready()
+            if current.active(current.store.load(), required=False):
+                raise RelayError("A Relay session is already active; suspend or finish it first.")
+        relay = Workspace(Path.cwd()) if args.repos else Relay(Git())
+    elif args.command in ("resume", "message"):
+        relay, args.session = select_session(
+            Path.cwd(), args.session, suspended=args.command == "resume",
+        )
     else:
         relay = discover()
     messages = getattr(args, "message", None)
@@ -298,18 +332,6 @@ def execute(args, paths: list[str]) -> int:
                     "Turn provenance: "
                     f"{'available' if status['provenance']['available'] else 'none yet'}"
                 )
-    elif args.command == "list":
-        sessions = relay.list_sessions()
-        if args.json:
-            print(json.dumps(sessions, indent=2))
-        elif not sessions:
-            print("No Relay sessions in this worktree.")
-        else:
-            for session in sorted(sessions, key=lambda s: s["id"]):
-                print(
-                    f"{session['id']}  {session['state']}  base={session['base_commit'][:12]}  "
-                    f"turns={session['turn']}  {message_subject(session['message'])}"
-                )
     elif args.command == "suspend":
         session, origin = relay.suspend()
         print(
@@ -353,7 +375,7 @@ def execute_workspace(args, paths: list[str], relay: Workspace, message: str | N
     command = args.command
 
     def editor(initial):
-        return edit_message(relay.git, initial)
+        return edit_message(relay.editor_git(getattr(args, "session", None)), initial)
 
     if command == "start":
         session = relay.start(message, repos=args.repos)
@@ -405,18 +427,6 @@ def execute_workspace(args, paths: list[str], relay: Workspace, message: str | N
                     f"  {name}: staged approvals={'yes' if item['staged_approvals'] else 'none'}; "
                     f"unstaged/untracked proposals={'yes' if item['unstaged_changes'] else 'none'}"
                 )
-    elif command == "list":
-        sessions = relay.list_sessions()
-        if args.json:
-            print(json.dumps(sessions, indent=2))
-        elif not sessions:
-            print("No Relay sessions in this workspace.")
-        else:
-            for session in sessions:
-                print(
-                    f"{session['id']}  {session['state']}  turns={session['turn']}  "
-                    f"{message_subject(session['message'])}"
-                )
     elif command == "suspend":
         session, origins = relay.suspend()
         print(f"Relay workspace session suspended: {session['id']}")
@@ -438,7 +448,9 @@ def execute_workspace(args, paths: list[str], relay: Workspace, message: str | N
     elif command == "abort":
         relay.store.assert_ready()
         session = relay.active(relay.store.load())
-        branches = {name: "relay/aborted/" + sid for name, sid in session["members"].items()}
+        branches = {
+            name: "relay/aborted/" + member["id"] for name, member in session["members"].items()
+        }
         if not confirm_abort(session["id"], branches):
             print("Abort cancelled. Relay session and code were not changed.")
             return 1

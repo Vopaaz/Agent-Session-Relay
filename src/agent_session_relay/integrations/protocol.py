@@ -43,6 +43,13 @@ they include internal bookkeeping.
 def protocol(context: dict) -> str:
     multi = "repositories" in context
     result = "[Agent-Session-Relay active]\n"
+    if multi:
+        result += "Workspace: " + json.dumps(context["workspace"]) + "\n"
+        repositories = context["repositories"]
+    else:
+        repositories = {".": context["repository"]}
+    result += "Repositories (name to absolute path, JSON):\n"
+    result += json.dumps(repositories, ensure_ascii=True) + "\n"
     if context["full_context"]:
         result += (
             "\nThese Git repositories share one Relay session.\n"
@@ -52,10 +59,6 @@ def protocol(context: dict) -> str:
             "Relay coordinates code review across human and agent turns, using Git\n"
             "for tracking human approvals and edits.\n\n"
         )
-        if multi:
-            result += "Workspace: " + json.dumps(context["workspace"]) + "\n"
-            result += "Repositories (name to absolute path, JSON):\n"
-            result += json.dumps(context["repositories"], ensure_ascii=True) + "\n\n"
         # Bootstrap review semantics even if the first interaction is a read-only aside.
         result += ("For normal turns:\n" if context["kind"] == "btw" else "") + NORMAL
         if context["kind"] == "btw":

@@ -29,7 +29,9 @@ class ProtocolTests(RepositoryTest):
                 introductions.append(output)
             else:
                 self.assertLess(len(output), len(introductions[0]) // 4)
-                self.assertLessEqual(len(output.splitlines()), 3)
+                self.assertLessEqual(len(output.splitlines()), 5)
+                self.assertIn(str(self.repo), output)
+                self.assertIn("Repositories (", output)
                 self.assertIn("Leave Relay controls to the human", output)
             retry = self.hook("prompt-submit", {"session_id": owner}).stdout
             self.assertNotIn("You are taking over", retry)

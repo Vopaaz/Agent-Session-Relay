@@ -78,7 +78,7 @@ class WorkspaceWorkflowTests(WorkspaceTest):
         ).stdout
         self.assertNotIn("Relay coordinates code review", brief)
         self.assertNotIn("You are taking over", brief)
-        self.assertNotIn("Repositories (", brief)
+        self.assertIn("Repositories (", brief)
         self.assertIn("Do not run Git directly", brief)
         self.assertEqual(injected_stats(brief, "Human"), {"r2/Config.kt": (2, 1)})
         self.hook("agent-stop", owner)
@@ -118,7 +118,7 @@ class WorkspaceWorkflowTests(WorkspaceTest):
                     self.assertIn('"r2"', context)
                 else:
                     self.assertIn("Do not run Git directly", context)
-                    self.assertNotIn("Repositories (", context)
+                    self.assertIn("Repositories (", context)
                 status = json.loads(self.ws("agent", "status", cwd=location).stdout)
                 self.assertEqual(status["turn"], 1)
                 self.assertEqual(set(status["repositories"]), {"r1", "r2"})
@@ -149,7 +149,7 @@ class WorkspaceWorkflowTests(WorkspaceTest):
         context = self.ws("kiro", "hook", "prompt-submit", cwd=self.other).stdout
         self.assertEqual(injected_stats(context, "Approved"), {"r1/Token.kt": (1, 1)})
         self.assertEqual(injected_stats(context, "Human"), {"r2/Config.kt": (1, 1)})
-        self.assertNotIn("Repositories (", context)
+        self.assertIn("Repositories (", context)
         self.assertEqual(
             self.ws("agent", "diff", "reviewed", "--name-only").stdout, "r1/Token.kt\n"
         )
@@ -239,7 +239,7 @@ class WorkspaceWorkflowTests(WorkspaceTest):
         self.ws("message", "--repo", "r2", "-m", "Update the infrastructure")
         self.ws("finish", cwd=self.other / "subdir")
         for name, repo, base in (("r1", self.repo, self.base), ("r2", self.other, second_base)):
-            branch = "relay/result/" + group["members"][name]
+            branch = "relay/result/" + group["members"][name]["id"]
             self.assertEqual(self.git("symbolic-ref", "--short", "HEAD", cwd=repo).strip(), branch)
             self.assertEqual(
                 self.git("rev-list", "--parents", "-n", "1", branch, cwd=repo).split()[1:], [base]
@@ -282,7 +282,7 @@ class WorkspaceWorkflowTests(WorkspaceTest):
             self.assertEqual(self.git("status", "--porcelain", cwd=repo), "")
             self.git("gc", "--prune=now", cwd=repo)
         self.assertEqual(self.ws("kiro", "hook", "prompt-submit").stdout, "")
-        self.ws("start", "-m", "Another feature", cwd=self.repo)
+        self.ws("start", "--repo", "r1", "--repo", "r2", "-m", "Another feature")
         second = self.group()["id"]
         self.ws("suspend")
         self.assertIn("Multiple suspended", self.ws("resume", ok=False).stderr)
@@ -337,7 +337,7 @@ class WorkspaceWorkflowTests(WorkspaceTest):
         output = self.ws("abort", input="abort\n", cwd=self.other).stdout
         self.assertEqual(output.count("Type 'abort'"), 1)
         for name, repo in (("r1", self.repo), ("r2", self.other)):
-            branch = "relay/aborted/" + group["members"][name]
+            branch = "relay/aborted/" + group["members"][name]["id"]
             self.assertIn(branch, output)
             self.assertEqual(self.git("show", branch + ":new.txt", cwd=repo), f"{name} pending\n")
             self.assertEqual(self.git("status", "--porcelain", cwd=repo), "")

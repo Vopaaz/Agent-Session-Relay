@@ -13,12 +13,12 @@ relay start --repo ./r1 --repo ./r2 -m "Implement the feature"
 
 Each argument must identify a distinct worktree root below `parent`. Members must not overlap or
 contain one another. Every member needs an initial commit, a clean and stable workspace, and no
-independent Relay session. Finish or abort existing standalone sessions before enrollment. Linked
+active Relay session. Other suspended sessions keep their own scope and review state. Linked
 worktrees are supported, including members sharing a Git object database.
 
-The member list is explicit. `parent/.relay/state.json` records configuration and active/suspended
-workspace sessions. Hooks must already be loaded; discovery does not install them or change the
-harness's filesystem permissions. No environment selector is required or provided.
+The member list is explicit. `parent/.relay/state.json` stores active/suspended
+sessions, each with its own member list; there is no shared repository configuration. Hooks must
+already be loaded. No environment selector is required or provided.
 
 The parent, each selected repository, and its subdirectories resolve to the same session. Discovery
 walks ancestors for `.relay/` and verifies the current Git worktree against the member list. Unselected
@@ -26,10 +26,33 @@ sibling repositories and independent nested repositories are outside the session
 and event cwd use these same rules; conflicting active sessions cause an error. A tool's own working
 directory cannot disable the active workspace's guard.
 
-After finish or abort, configuration remains. `relay start` from any recognized entry starts another
-session with the same members. To change membership, finish or abort all active and suspended
-workspace sessions, then run `relay start --repo ...` again from `parent`. Membership cannot change
-within a session. Standalone usage outside configured workspaces keeps its existing behavior.
+`relay resume` restores the selected session's exact scope. New multi-repository sessions specify
+their members with `relay start --repo ...`; plain `relay start` starts in the current Git worktree.
+Finished sessions leave no repository configuration to reuse.
+
+## Add a repository during a session
+
+```bash
+# While the active session is in the human phase, from parent/r1:
+relay repo add ../r2
+```
+
+The path is relative to cwd and must identify a clean, stable Git worktree root with an initial
+commit and no active session. Existing members may have staged approvals and pending changes.
+`add` requires an active session in the human phase; inactive, suspended, and agent-phase calls
+fail. It affects only that session, including when other sessions use the same worktrees.
+
+For a standalone session, Relay selects the nearest common parent of the original and new
+worktrees as the workspace root. The original session ID, base, checkpoints, staging, and turn
+history are preserved. Neither the command nor the harness needs to change cwd. Existing
+multi-repository sessions keep their root; additions must be below it. Members cannot overlap.
+
+New members use their own HEAD as their immutable base and reviewed checkpoint. They join the
+next handoff with the session's next-turn mode and turn numbering, without invented earlier
+snapshots. They use the same member records and lifecycle as initial members. Diff/status,
+per-repository messages, finish, abort, suspend/resume, and recovery include them normally.
+Standalone suspended sessions remain in their original stores and are discoverable with `list`,
+`message`, and `resume` from their worktrees. Adding a member is a recoverable group transaction.
 
 ## Review and inspection
 
@@ -37,8 +60,9 @@ Each member retains its own base, reviewed HEAD, index, snapshots, and semantic 
 next-turn mode, and conversation ownership are coordinated. Normal/btw and interrupted-turn rules
 apply to the entire group. Duplicate hooks from different member directories continue the same turn.
 
-The first hook in each conversation introduces all members and their paths. Later hooks use a brief
-Relay reminder; changing cwd does not repeat the introduction. Each new normal turn includes per-file
+Every prompt hook includes the current members and their absolute paths, including single-repository
+sessions and continuations. The first hook in each conversation introduces review semantics; later
+hooks use a brief Relay reminder. Each new normal turn includes per-file
 added/deleted line counts for approvals and human edits, with workspace-relative paths such as
 `r1/src/main.py`. Binary changes are marked `binary`.
 
@@ -78,7 +102,7 @@ inspect Relay state.
 
 `btw`, `end-interrupted-agent-turn`, `suspend`, `resume`, `finish`, and `abort` operate on the whole
 session. Suspend saves every workspace and full index; resume checks all members before restoring
-them. Multiple suspended sessions with the same membership are supported. `list` and ID prefixes
+them. Suspended sessions may have different membership. `list` and ID prefixes
 refer to logical workspace sessions.
 
 `relay message -m "Feature description"` sets the shared description. `relay message --repo r1 -m
@@ -93,7 +117,7 @@ descriptions/overrides, and member descriptions also use native Git refs.
 
 Finish requires every member's workspace to equal its index, including approvals staged since the
 last handoff. Changed members need a public Git identity. Each gets one result commit, parented by
-its own fixed base, on `relay/result/<workspace-session-id>-<member-number>`. The suffix prevents
+its own fixed base, on `relay/result/<member-session-id>`. Distinct member IDs prevent
 collisions between linked worktrees. Internal checkpoints are excluded from public ancestry.
 Unchanged members return to their available origin without creating an empty commit.
 

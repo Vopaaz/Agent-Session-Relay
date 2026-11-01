@@ -30,27 +30,66 @@ def read_json(path: Path) -> dict:
 
 
 class WorkspaceStore(MetadataStore):
-    schema = 1
+    schema = 2
+
+    @staticmethod
+    def member_records(members: dict, repositories: list[dict]) -> dict:
+        identities = {repo["name"]: repo["git_dir"] for repo in repositories}
+        return {name: {"id": sid, "git_dir": identities[name]} for name, sid in members.items()}
+
+    def upgrade(self, state: dict) -> dict:
+        """Read schema 1 without retaining its workspace-wide configuration or rewriting peers."""
+        if state.get("schema") != 1:
+            return state
+        state = copy.deepcopy(state)
+        repositories = state.pop("repositories", [])
+        for group in state["sessions"].values():
+            group["members"] = self.member_records(group["members"], repositories)
+            group["owners"] = []
+            group["turn_kind"] = None
+            for member in group["members"].values():
+                directory = Path(member["git_dir"]) / "agent-session-relay"
+                local = read_json(directory / "state.json")["sessions"].get(member["id"])
+                if local is None and (directory / "transaction.json").exists():
+                    local = read_json(directory / "transaction.json")["state"]["sessions"].get(
+                        member["id"]
+                    )
+                for turn in (local or {}).get("turns", []):
+                    if turn.get("owner") not in group["owners"]:
+                        group["owners"].append(turn.get("owner"))
+                    if turn["number"] == group["turn"]:
+                        group["turn_kind"] = turn["kind"]
+        state["schema"] = self.schema
+        return state
 
     def load(self) -> dict:
-        state = super().load()
-        state.setdefault("repositories", [])
         try:
-            names = []
-            for repo in state["repositories"]:
-                name = repo["name"]
-                path = Path(name)
-                if not name or path.is_absolute() or ".." in path.parts or str(path) != name:
-                    raise ValueError("invalid member path")
-                if name == "." or not isinstance(repo["git_dir"], str):
-                    raise ValueError("invalid worktree")
-                names.append(name)
-            if len(set(names)) != len(names):
-                raise ValueError("duplicate members")
-            for session in state["sessions"].values():
-                if set(session["members"]) != set(names):
-                    raise ValueError("invalid session members")
-        except (KeyError, TypeError, ValueError) as exc:
+            raw = read_json(self.path) if self.path.exists() else None
+            state = self.upgrade(raw) if raw and raw.get("schema") == 1 else super().load()
+            if state["active"] is not None and state["active"] not in state["sessions"]:
+                raise ValueError("invalid active session")
+            for sid, session in state["sessions"].items():
+                if session["id"] != sid or session["state"] not in ("active", "suspended"):
+                    raise ValueError("invalid session")
+                if not session["members"]:
+                    raise ValueError("empty session")
+                roots = []
+                ids = set()
+                for name, member in session["members"].items():
+                    path = Path(name)
+                    if (
+                        not name or path.is_absolute() or ".." in path.parts
+                        or str(path) != name or name == "."
+                        or not isinstance(member["git_dir"], str)
+                        or not isinstance(member["id"], str)
+                        or not member["id"] or member["id"] in ids
+                    ):
+                        raise ValueError("invalid member")
+                    if any(path.is_relative_to(p) or p.is_relative_to(path) for p in roots):
+                        raise ValueError("overlapping members")
+                    roots.append(path)
+                    ids.add(member["id"])
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
             raise RelayError(f"Invalid workspace metadata at {self.path}.") from exc
         return state
 
@@ -62,22 +101,35 @@ class Workspace:
         self.store = WorkspaceStore(self.root / ".relay")
 
     def active(self, state: dict, *, required: bool = True) -> dict | None:
-        return Relay.active(self, state, required=required)
+        group = Relay.active(self, state, required=False)
+        if group is not None and self._visible(group):
+            return group
+        if required:
+            raise RelayError("No active Relay session. Use `relay start` or `relay resume`.")
+        return None
 
-    def _members(self, state: dict) -> dict[str, Relay]:
+    def _visible(self, group: dict) -> bool:
+        if self.cwd == self.root:
+            return True
+        try:
+            root = Git(self.cwd).root.resolve()
+        except RelayError:
+            return False
+        return any(root == self.root / name for name in group["members"])
+
+    def _members(self, group: dict) -> dict[str, Relay]:
         members = {}
-        for repo in state["repositories"]:
-            name = repo["name"]
+        for name, member in sorted(group["members"].items()):
             try:
                 git = Git(self.root / name)
                 if (
                     git.root.resolve() != self.root / name
-                    or str(git.git_dir.resolve()) != repo["git_dir"]
+                    or str(git.git_dir.resolve()) != member["git_dir"]
                 ):
                     raise RelayError("the registered worktree has moved or been replaced")
             except RelayError as exc:
                 raise RelayError(f"Workspace member {name}: {exc}") from exc
-            members[name] = Relay(git)
+            members[name] = Relay(git, coordinator=str(self.store.path))
         return members
 
     @contextmanager
@@ -88,11 +140,12 @@ class Workspace:
             yield
 
     @contextmanager
-    def _locked(self):
+    def _locked(self, name: str | None = None, *, suspended: bool = False):
         with self.store.lock():
             self.store.assert_ready()
             state = self.store.load()
-            members = self._members(state)
+            group = self._select(state, name, suspended=suspended)
+            members = self._members(group)
             with self._member_locks(members):
                 for relay in members.values():
                     relay.store.assert_ready()
@@ -101,11 +154,12 @@ class Workspace:
     def _validate(self, group: dict, members: dict[str, Relay]) -> None:
         for name, relay in members.items():
             state = relay.store.load()
-            session = state["sessions"].get(group["members"][name])
+            session = state["sessions"].get(group["members"][name]["id"])
             if session is None or any(
                 session[key] != group[key] for key in ("state", "phase", "turn", "next_turn")
             ):
                 raise RelayError(f"Workspace member {name} has inconsistent session state.")
+            relay.check_owner(session)
             if group["state"] == "active":
                 if state["active"] != session["id"]:
                     raise RelayError(f"Workspace member {name} has a different active session.")
@@ -114,9 +168,14 @@ class Workspace:
     @staticmethod
     def _sync(group: dict, members: dict[str, Relay]) -> None:
         name, relay = next(iter(members.items()))
-        session = relay.store.load()["sessions"][group["members"][name]]
+        session = relay.store.load()["sessions"][group["members"][name]["id"]]
         for key in ("state", "phase", "turn", "next_turn"):
             group[key] = session[key]
+        for name, relay in members.items():
+            turns = relay.store.load()["sessions"][group["members"][name]["id"]]["turns"]
+            if turns and turns[-1]["number"] == group["turn"]:
+                group["turn_kind"] = turns[-1]["kind"]
+                break
 
     def _journals(self, members: dict[str, Relay]) -> dict[str, dict]:
         journals = {}
@@ -127,6 +186,15 @@ class Workspace:
                     raise RelayError(f"Member {name} has an unrelated interrupted operation.")
                 journals[name] = journal
         return journals
+
+    def journal(self) -> dict:
+        journal = read_json(self.store.journal_path)
+        if "repositories" in journal:
+            journal["members"] = self.store.member_records(
+                journal["members"], journal.pop("repositories")
+            )
+            journal["state"] = self.store.upgrade(journal["state"])
+        return journal
 
     def _cleanup(self, members: dict[str, Relay]) -> None:
         for name, journal in self._journals(members).items():
@@ -159,8 +227,7 @@ class Workspace:
             snapshots[name] = relay.workspace_tree(local) if local else relay.git.workspace_tree()
         journal = {
             "state": copy.deepcopy(state if previous is None else previous),
-            "repositories": state["repositories"],
-            "members": group["members"],
+            "members": copy.deepcopy(group["members"]),
             "action": action,
             "decision": "pending",
         }
@@ -169,7 +236,7 @@ class Workspace:
             for name, relay in members.items():
                 local = relay.store.prepare(
                     relay.store.load(),
-                    group["members"][name],
+                    group["members"][name]["id"],
                     action,
                     snapshots[name],
                     coordinator=self.store.journal_path,
@@ -196,8 +263,8 @@ class Workspace:
             for relay in members.values():
                 relay.store.coordinated_journal = None
 
-    def _configuration(self, paths: list[str]) -> list[dict]:
-        repositories = []
+    def _parse_members(self, paths: list[str], *, argument: str = "--repo") -> dict:
+        members = {}
         roots = []
         for path in paths:
             try:
@@ -205,81 +272,149 @@ class Workspace:
                     raise RelayError("path is not a directory")
                 git = Git(self.cwd / path)
             except FileNotFoundError as exc:
-                raise RelayError(f"Invalid --repo '{path}': directory does not exist") from exc
+                raise RelayError(f"Invalid {argument} '{path}': directory does not exist") from exc
             except (OSError, RelayError) as exc:
-                raise RelayError(f"Invalid --repo '{path}': {exc}") from exc
+                raise RelayError(f"Invalid {argument} '{path}': {exc}") from exc
             root = git.root.resolve()
             if root != (self.cwd / path).resolve():
-                raise RelayError(f"--repo must name a worktree root: {path}")
+                raise RelayError(f"{argument} must name a worktree root: {path}")
             if root == self.root or not root.is_relative_to(self.root):
-                raise RelayError("Every --repo must be below the common workspace directory.")
+                raise RelayError("Every repository must be below the common workspace directory.")
             if any(root.is_relative_to(other) or other.is_relative_to(root) for other in roots):
                 raise RelayError("Workspace members must be distinct, non-overlapping worktrees.")
             existing = find_workspace(root)
-            if existing is not None and existing.root != self.root:
+            if existing is not None and existing.active(existing.store.load(), required=False):
                 raise RelayError(f"Worktree {path} already belongs to workspace {existing.root}.")
             roots.append(root)
-            repositories.append(
-                {
-                    "name": root.relative_to(self.root).as_posix(),
-                    "git_dir": str(git.git_dir.resolve()),
-                }
-            )
-        return sorted(repositories, key=lambda r: r["name"])
+            members[root.relative_to(self.root).as_posix()] = {
+                "git_dir": str(git.git_dir.resolve()),
+            }
+        return dict(sorted(members.items()))
+
+    @staticmethod
+    def _check_new_member(name: str, relay: Relay) -> None:
+        relay.store.assert_ready()
+        if relay.store.load()["active"]:
+            raise RelayError(f"Member {name} already has an active Relay session.")
+        relay.git.assert_clean()
+        try:
+            relay.git.head()
+        except RelayError as exc:
+            raise RelayError(f"Create an initial Git commit in {name} first.") from exc
 
     def start(self, message: str | None = None, *, repos: list[str] | None = None) -> dict:
         with self.store.lock():
             self.store.assert_ready()
             state = self.store.load()
             previous = copy.deepcopy(state)
-            if self.active(state, required=False):
+            if state["active"]:
                 raise RelayError("A Relay session is already active; suspend or finish it first.")
-            if repos is not None:
-                configured = self._configuration(repos)
-                if state["sessions"] and configured != state["repositories"]:
-                    raise RelayError("Finish existing workspace sessions before changing members.")
-                state["repositories"] = configured
-            if not state["repositories"]:
+            if not repos:
                 raise RelayError("Select workspace members with `relay start --repo <path> ...`.")
-            members = self._members(state)
+            sid = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
+            configured = self._parse_members(repos)
+            group = {
+                "id": sid,
+                "state": "active",
+                "created_at": now(),
+                "message": message,
+                "messages": {},
+                "phase": "human",
+                "turn": 0,
+                "turn_kind": None,
+                "owners": [],
+                "next_turn": "normal",
+                "members": {
+                    name: {**member, "id": f"{sid}-{i:02d}"}
+                    for i, (name, member) in enumerate(configured.items(), 1)
+                },
+            }
+            members = self._members(group)
             with self._member_locks(members):
                 for name, relay in members.items():
-                    relay.store.assert_ready()
-                    local = relay.store.load()
-                    expected = {s["members"][name] for s in state["sessions"].values()}
-                    if local["active"] or set(local["sessions"]) != expected:
-                        raise RelayError(
-                            f"Member {name} has an independent Relay session; finish or abort it "
-                            "before starting this workspace session."
-                        )
-                    relay.git.assert_clean()
-                    try:
-                        relay.git.head()
-                    except RelayError as exc:
-                        raise RelayError(f"Create an initial Git commit in {name} first.") from exc
+                    self._check_new_member(name, relay)
                 if message is not None:
                     message = Relay.validate_message(message)
-                sid = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
-                group = {
-                    "id": sid,
-                    "state": "active",
-                    "created_at": now(),
-                    "message": message,
-                    "messages": {},
-                    "phase": "human",
-                    "turn": 0,
-                    "next_turn": "normal",
-                    # Distinct namespaces also support linked worktrees sharing one Git database.
-                    "members": {name: f"{sid}-{i:02d}" for i, name in enumerate(members, 1)},
-                }
+                    group["message"] = message
                 with self._transaction(state, group, members, "start", previous=previous):
                     for name, relay in members.items():
-                        relay.start(message, session_id=group["members"][name])
+                        relay.start(message, session_id=group["members"][name]["id"])
                     state["sessions"][sid] = group
                     state["active"] = sid
                 return copy.deepcopy(group)
 
+    def add(self, path: str, *, original: Relay | None = None) -> dict:
+        """Enroll a clean worktree, adopting only the active standalone session if needed."""
+        with self.store.lock():
+            self.store.assert_ready()
+            state = self.store.load()
+            previous = copy.deepcopy(state)
+            if original is None:
+                group = self.active(state)
+            else:
+                if state["active"]:
+                    raise RelayError("The common directory already has an active Relay session.")
+                local = original.active(original.store.load())
+                name = original.git.root.relative_to(self.root).as_posix()
+                group = {
+                    **{key: local[key] for key in (
+                        "id", "state", "created_at", "phase", "turn", "next_turn",
+                    )},
+                    "turn_kind": local["turns"][-1]["kind"] if local["turns"] else None,
+                    "owners": list(dict.fromkeys(t.get("owner") for t in local["turns"])),
+                    "message": None,
+                    "messages": {},
+                    "members": {name: {
+                        "id": local["id"], "git_dir": str(original.git.git_dir.resolve()),
+                    }},
+                }
+            if group["phase"] != "human":
+                raise RelayError(
+                    "Repository additions require the human phase. Wait for Agent Stop."
+                )
+            configured = self._parse_members([path], argument="repo add")
+            name, member = next(iter(configured.items()))
+            root = self.root / name
+            if any(root.is_relative_to(self.root / other)
+                   or (self.root / other).is_relative_to(root) for other in group["members"]):
+                raise RelayError("Session members must be distinct, non-overlapping worktrees.")
+            # IDs never depend on ordering, including linked worktrees sharing Git refs.
+            member["id"] = group["id"] + "-" + uuid.uuid4().hex[:8]
+            expanded = copy.deepcopy(group)
+            expanded["members"][name] = member
+            members = self._members(expanded)
+            with self._member_locks(members):
+                for relay in members.values():
+                    relay.store.assert_ready()
+                if original is None:
+                    self._validate(group, {n: r for n, r in members.items() if n != name})
+                else:
+                    current = original.active(original.store.load())
+                    if current != local:
+                        raise RelayError("Session changed while adding a repository; retry.")
+                    original.validate(current)
+                    expanded["message"] = original.session_message(current)
+                self._check_new_member(name, members[name])
+                with self._transaction(state, expanded, members, "repo-add", previous=previous):
+                    if original is not None:
+                        local_state = original.store.load()
+                        local_state["sessions"][group["id"]]["coordinator"] = str(self.store.path)
+                        original.store.save(local_state)
+                    added = members[name]
+                    added.start(expanded["message"], session_id=member["id"])
+                    local_state = added.store.load()
+                    session = local_state["sessions"][member["id"]]
+                    session["turn"] = group["turn"]
+                    session["next_turn"] = group["next_turn"]
+                    added.store.save(local_state)
+                    state["sessions"][group["id"]] = expanded
+                    state["active"] = group["id"]
+                return copy.deepcopy(expanded)
+
     def _select(self, state: dict, name: str | None, *, suspended: bool = False) -> dict:
+        state = {**state, "sessions": {
+            sid: group for sid, group in state["sessions"].items() if self._visible(group)
+        }}
         if suspended:
             return Relay.select_suspended(self, state, name)
         if name is None:
@@ -289,23 +424,26 @@ class Workspace:
             raise RelayError("Session ID must match exactly one session. Use `relay list`.")
         return matches[0]
 
-    def repository(self, name: str, state: dict | None = None) -> str:
-        state = state if state is not None else self.store.load()
-        for repo in state["repositories"]:
-            if name == repo["name"] or (self.cwd / name).resolve() == self.root / repo["name"]:
-                return repo["name"]
+    def repository(self, name: str, group: dict | None = None) -> str:
+        group = group if group is not None else self.active(self.store.load())
+        for member in group["members"]:
+            if name == member or (self.cwd / name).resolve() == self.root / member:
+                return member
         raise RelayError(f"Unknown workspace repository: {name}")
 
     @property
     def git(self) -> Git:
+        return self.editor_git()
+
+    def editor_git(self, name: str | None = None) -> Git:
         # Editor configuration is stable across entry directories: use the first member.
-        return next(iter(self._members(self.store.load()).values())).git
+        return next(iter(self._members(self._select(self.store.load(), name)).values())).git
 
     def set_message(self, message=None, name=None, *, editor=None, repo=None) -> dict:
-        with self._locked() as (state, members):
+        with self._locked(name) as (state, members):
             group = self._select(state, name)
             self._validate(group, members)
-            selected = self.repository(repo, state) if repo is not None else None
+            selected = self.repository(repo, group) if repo is not None else None
             initial = group["messages"].get(selected, group["message"])
             expected = copy.deepcopy(group)
         if message is None:
@@ -313,7 +451,7 @@ class Workspace:
                 raise RelayError("Provide a session message or a message editor.")
             message = editor(initial)
         message = Relay.validate_message(message)
-        with self._locked() as (state, members):
+        with self._locked(expected["id"]) as (state, members):
             group = state["sessions"].get(expected["id"])
             if group != expected:
                 raise RelayError("Message editing cancelled: the workspace session changed.")
@@ -326,14 +464,14 @@ class Workspace:
                 for member, relay in members.items():
                     value = group["messages"].get(member, group["message"])
                     if value is not None:
-                        relay.set_message(value, group["members"][member])
+                        relay.set_message(value, group["members"][member]["id"])
             return {**copy.deepcopy(group), "message": message}
 
     def list_sessions(self) -> list[dict]:
         self.store.assert_ready()
         with self.store.lock():
             self.store.assert_ready()
-            return list(self.store.load()["sessions"].values())
+            return [g for g in self.store.load()["sessions"].values() if self._visible(g)]
 
     def set_btw(self, *, cancel=False) -> str:
         with self._locked() as (state, members):
@@ -363,6 +501,8 @@ class Workspace:
                 return None
             self._validate(group, members)
             contexts = {}
+            continuing = group["phase"] == "agent"
+            full_context = not continuing and owner not in group["owners"]
             if group["phase"] == "agent":
                 # Duplicate delivery must not create snapshots or consume approvals.
                 contexts = {name: relay.handoff(owner) for name, relay in members.items()}
@@ -370,12 +510,14 @@ class Workspace:
                 with self._transaction(state, group, members, "handoff"):
                     contexts = {name: relay.handoff(owner) for name, relay in members.items()}
                     self._sync(group, members)
+                    if owner not in group["owners"]:
+                        group["owners"].append(owner)
             first = next(iter(contexts.values()))
             return {
                 "kind": first["kind"],
                 "continuing": first["continuing"],
-                "full_context": any(context["full_context"] for context in contexts.values()),
-                "has_prior_turns": first["has_prior_turns"],
+                "full_context": full_context,
+                "has_prior_turns": group["turn"] > 1,
                 "workspace": str(self.root),
                 "repositories": {name: str(self.root / name) for name in members},
                 **{
@@ -422,8 +564,8 @@ class Workspace:
             return copy.deepcopy(group), origins
 
     def resume(self, name=None) -> dict:
-        with self._locked() as (state, members):
-            if self.active(state, required=False):
+        with self._locked(name, suspended=True) as (state, members):
+            if state["active"]:
                 raise RelayError("A Relay session is already active; suspend or finish it first.")
             group = self._select(state, name, suspended=True)
             self._validate(group, members)
@@ -433,7 +575,7 @@ class Workspace:
                 relay.git.assert_clean()
             with self._transaction(state, group, members, "resume"):
                 for member, relay in members.items():
-                    relay.resume(group["members"][member])
+                    relay.resume(group["members"][member]["id"])
                 self._sync(group, members)
                 state["active"] = group["id"]
             return copy.deepcopy(group)
@@ -506,7 +648,8 @@ class Workspace:
             self._validate(group, members)
             with self._transaction(state, group, members, "abort"):
                 results = {
-                    name: relay.abort(group["members"][name]) for name, relay in members.items()
+                    name: relay.abort(group["members"][name]["id"])
+                    for name, relay in members.items()
                 }
                 del state["sessions"][group["id"]]
                 state["active"] = None
@@ -519,7 +662,7 @@ class Workspace:
         with self.store.lock():
             if not self.store.journal_path.exists():
                 raise RelayError("No interrupted Relay operation needs recovery.")
-            journal = read_json(self.store.journal_path)
+            journal = self.journal()
             members = self._members(journal)
             with self._member_locks(members):
                 branches = {}
@@ -545,10 +688,11 @@ class Workspace:
         self.store.assert_ready()
         state = self.store.load()
         if not self.active(state, required=False):
+            suspended = [g["id"] for g in state["sessions"].values() if self._visible(g)]
             return {
                 "active": False,
-                "lifecycle": "suspended" if state["sessions"] else "inactive",
-                "suspended_sessions": sorted(state["sessions"]),
+                "lifecycle": "suspended" if suspended else "inactive",
+                "suspended_sessions": sorted(suspended),
                 "workspace": str(self.root),
             }
         with self._locked() as (state, members):
@@ -558,17 +702,14 @@ class Workspace:
                 name: {**relay.status(), "path": str(self.root / name)}
                 for name, relay in members.items()
             }
-            first = next(iter(statuses.values()))
             return {
                 "active": True,
                 "session": group["id"],
                 "message": group["message"],
                 "workspace": str(self.root),
                 "repositories": statuses,
-                **{
-                    key: first[key]
-                    for key in ("lifecycle", "phase", "turn", "turn_kind", "next_turn")
-                },
+                "lifecycle": group["state"],
+                **{key: group[key] for key in ("phase", "turn", "turn_kind", "next_turn")},
                 **{
                     key: any(status[key] for status in statuses.values())
                     for key in (
@@ -580,7 +721,7 @@ class Workspace:
                 },
                 "provenance": {
                     key: any(s["provenance"][key] for s in statuses.values())
-                    for key in first["provenance"]
+                    for key in ("available", "newly_reviewed", "human_edits")
                 },
             }
 
@@ -610,7 +751,7 @@ class Workspace:
         with self._locked() as (state, members):
             self._validate(self.active(state), members)
             if repo is not None:
-                selected = self.repository(repo, state)
+                selected = self.repository(repo, self.active(state))
                 members = {selected: members[selected]}
             filters: dict[str, list[str]] = {name: [] for name in members}
             included = set(members) if not paths else set()
@@ -663,35 +804,100 @@ class Workspace:
             return b"".join(output)
 
 
-def find_workspace(cwd: Path | str) -> Workspace | None:
+def _workspaces(cwd: Path | str) -> list[Workspace]:
     location = Path(cwd).resolve()
-    git = None
+    result = []
     for root in (location, *location.parents):
         workspace = Workspace(root, location)
-        if not workspace.store.path.exists() and not workspace.store.journal_path.exists():
-            continue
-        state = workspace.store.load()
-        repositories = state["repositories"]
         if workspace.store.journal_path.exists():
-            repositories = read_json(workspace.store.journal_path)["repositories"]
-        if location == root:
+            if workspace._visible(workspace.journal()):
+                result.append(workspace)
+        elif workspace.store.path.exists():
+            state = workspace.store.load()
+            if location == root or any(workspace._visible(g) for g in state["sessions"].values()):
+                result.append(workspace)
+    return result
+
+
+def find_workspace(cwd: Path | str) -> Workspace | None:
+    candidates = _workspaces(cwd)
+    for workspace in candidates:
+        if workspace.store.journal_path.exists() or workspace.active(
+            workspace.store.load(), required=False
+        ):
             return workspace
-        if git is None:
-            try:
-                git = Git(location)
-            except RelayError:
-                return None
-        if any(git.root.resolve() == root / repo["name"] for repo in repositories):
-            return workspace
-    return None
+    return next(iter(candidates), None)
 
 
 def discover(cwd: Path | str = ".", *, required: bool = True) -> Relay | Workspace | None:
-    if workspace := find_workspace(cwd):
+    workspace = find_workspace(cwd)
+    if workspace is not None and (
+        workspace.store.journal_path.exists()
+        or workspace.active(workspace.store.load(), required=False)
+    ):
         return workspace
     try:
-        return Relay(Git(cwd))
+        local = Relay(Git(cwd))
     except RelayError:
+        if workspace is not None:
+            return workspace
         if required:
             raise
         return None
+    if local.active(local.store.load(), required=False):
+        return local
+    return workspace or local
+
+
+def session_sources(cwd: Path | str = ".") -> list[tuple[Relay | Workspace, dict]]:
+    """Find logical sessions without exposing their per-worktree implementation records."""
+    result = []
+    managed = set()
+    for workspace in _workspaces(cwd):
+        for group in workspace.list_sessions():
+            result.append((workspace, group))
+            managed.update(member["id"] for member in group["members"].values())
+    try:
+        local = Relay(Git(cwd))
+    except RelayError:
+        return result
+    result.extend((local, session) for session in local.list_sessions()
+                  if session["id"] not in managed)
+    return result
+
+
+def select_session(
+    cwd: Path | str, name: str | None, *, suspended: bool = False,
+) -> tuple[Relay | Workspace, str]:
+    sources = session_sources(cwd)
+    if name is None and not suspended:
+        active = [(relay, s) for relay, s in sources if s["state"] == "active"]
+        if active:
+            sources = active
+    if suspended or name is None:
+        sources = [(relay, s) for relay, s in sources if s["state"] == "suspended"
+                   or (not suspended and s["state"] == "active")]
+    matches = [(relay, s) for relay, s in sources if name is None or s["id"].startswith(name)]
+    if len(matches) != 1:
+        if not matches:
+            raise RelayError("No matching Relay session. Use `relay list`.")
+        label = "Multiple suspended sessions: " if suspended else "Multiple matching sessions: "
+        raise RelayError(label + ", ".join(s["id"] for _, s in matches)
+                         + ". Use a session ID from `relay list`.")
+    relay, session = matches[0]
+    return relay, session["id"]
+
+
+def add_repository(path: str, cwd: Path | str = ".") -> tuple[Workspace, dict]:
+    relay = discover(cwd)
+    relay.store.assert_ready()
+    session = relay.active(relay.store.load())
+    if session["phase"] != "human":
+        raise RelayError("Repository additions require the human phase. Wait for Agent Stop.")
+    if isinstance(relay, Workspace):
+        return relay, relay.add(path)
+    # Resolve the common directory without changing either process's working directory.
+    target = Path(cwd).resolve() / path
+    workspace = Workspace(Path(os.path.commonpath([relay.git.root, target.resolve()])), cwd)
+    workspace._parse_members([str(relay.git.root), path], argument="repo add")
+    return workspace, workspace.add(path, original=relay)
