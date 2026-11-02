@@ -51,7 +51,8 @@ relay agent diff human --name-only                 # names such as service/src/o
 relay agent diff pending --repo service            # just this member's patch
 relay agent git --repo service log --oneline main   # query from this member's root
 relay message --repo cdk -m "Configure cancellation events"  # optional message override
-relay finish                                      # all members must be fully reviewed
+relay repo finish ./cdk                            # finish and remove a reviewed member
+relay finish                                      # finish all remaining members after review
 ```
 
 Finish always prefers per-repository messages. Members without one use the shared message;
@@ -68,11 +69,18 @@ member session ID. The common parent's `.relay/` directory stores each session's
 own membership and coordination state. New multi-repository sessions specify `--repo` again; plain
 `relay start` starts in the current Git worktree. Suspended sessions retain their original scope.
 
-During the active session's human turn, use `relay repo add ../another-package` to enroll a clean
-Git worktree with an initial commit. Only this session changes. A standalone session automatically
-becomes a multi-repository session rooted at the nearest common parent, preserving its ID, review
-state, and cwd. An existing multi-repository session keeps its root. Every prompt hook includes the
-current scope; all member repositories use the same diff, review, and lifecycle operations.
+During the active session's human turn, use `relay repo add ../package-a ../package-b` to enroll one
+or more clean Git worktrees with initial commits in one transaction. Only this session changes.
+A standalone session automatically becomes a multi-repository session rooted at the nearest common
+parent, preserving its ID, review state, and cwd. An existing multi-repository session keeps its root.
+Every prompt hook includes the current scope; all member repositories use the same diff, review, and
+lifecycle operations.
+
+Use `relay repo finish ./package-a ./package-b [-m "message"]` in the human phase to finish selected
+members and remove them from the session. Only those members must be fully reviewed; remaining
+members keep their review state, session ID, and workspace root. Finishing the last member ends the
+session. If the agent was started in a repository that has now left, start a new agent session from
+the common parent or a remaining member. Git guard behavior is unchanged.
 
 See [multi-repository sessions](docs/workspaces.md) for membership, messages, and recovery details.
 
@@ -192,7 +200,8 @@ See [integration details and a live smoke test](https://github.com/Vopaaz/Agent-
 | Command | Effect |
 | --- | --- |
 | `relay start [--repo PATH ...] [-m "message"]` | Start from clean, stable worktrees; optionally select multiple repositories and describe the work |
-| `relay repo add PATH` | Add a clean worktree to the active session during its human turn |
+| `relay repo add PATH [PATH ...]` | Add clean worktrees to the active session during its human turn |
+| `relay repo finish PATH [PATH ...] [-m "message"]` | Finish selected reviewed repositories during the human phase and remove them from the session |
 | `relay message [session] [-m "message"]` | Set the session message; omit `-m` to open the Git editor |
 | `relay status` | Show the session message, lifecycle, reviewed checkpoint, staged approvals, and remaining proposals |
 | `relay end-interrupted-agent-turn` | After manually interrupting the agent, close its open turn before human review |
@@ -258,7 +267,12 @@ from Relay's review state, semantic diffs, status, and subsequent handoffs. If n
 underlying snapshots through `relay agent git`. Suspend/resume preserves these Git objects and any
 pending btw selection; finish/abort deletes them with the session.
 
-Versions 0.3.0 through 0.8.2 share per-worktree schema 2, so existing sessions need no migration.
+Versions 0.3.0 through 0.10.0 share per-worktree schema 2. Workspace coordinator metadata has used
+schema 2 since v0.9.0; existing v0.9.0 sessions need no migration or hook reinstall.
+For finishing selected repositories and adding several repositories at once, see the
+[v0.10.0 release notes](docs/releases/v0.10.0.md).
+For repository additions and the workspace metadata upgrade from v0.8.x, see the
+[v0.9.0 release notes](docs/releases/v0.9.0.md).
 For clearer `relay start --repo` path errors, see the
 [v0.8.2 release notes](docs/releases/v0.8.2.md).
 For the finish check fix after changing ignore rules, see the

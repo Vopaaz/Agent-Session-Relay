@@ -1,8 +1,8 @@
 # Multi-repository sessions
 
 A workspace session coordinates one feature across explicitly selected Git worktrees. The human
-reviews each repository with their normal Git UI. One prompt hands off every member; one Stop closes
-the shared turn. All members finish together.
+reviews each repository with their normal Git UI. One prompt hands off every current member; one
+Stop closes the shared turn. Members can finish together or leave as their work is completed.
 
 ## Start and discovery
 
@@ -30,19 +30,19 @@ directory cannot disable the active workspace's guard.
 their members with `relay start --repo ...`; plain `relay start` starts in the current Git worktree.
 Finished sessions leave no repository configuration to reuse.
 
-## Add a repository during a session
+## Add repositories during a session
 
 ```bash
 # While the active session is in the human phase, from parent/r1:
-relay repo add ../r2
+relay repo add ../r2 ../r3
 ```
 
-The path is relative to cwd and must identify a clean, stable Git worktree root with an initial
+Each path is relative to cwd and must identify a clean, stable Git worktree root with an initial
 commit and no active session. Existing members may have staged approvals and pending changes.
 `add` requires an active session in the human phase; inactive, suspended, and agent-phase calls
 fail. It affects only that session, including when other sessions use the same worktrees.
 
-For a standalone session, Relay selects the nearest common parent of the original and new
+For a standalone session, Relay selects the nearest common parent of the original and all new
 worktrees as the workspace root. The original session ID, base, checkpoints, staging, and turn
 history are preserved. Neither the command nor the harness needs to change cwd. Existing
 multi-repository sessions keep their root; additions must be below it. Members cannot overlap.
@@ -52,7 +52,48 @@ next handoff with the session's next-turn mode and turn numbering, without inven
 snapshots. They use the same member records and lifecycle as initial members. Diff/status,
 per-repository messages, finish, abort, suspend/resume, and recovery include them normally.
 Standalone suspended sessions remain in their original stores and are discoverable with `list`,
-`message`, and `resume` from their worktrees. Adding a member is a recoverable group transaction.
+`message`, and `resume` from their worktrees. All paths are validated before enrollment, and the
+whole batch is one recoverable group transaction. If validation or enrollment fails, no new members
+are kept.
+
+## Finish selected repositories during a session
+
+```bash
+# During the human phase, from parent:
+relay repo finish ./r1 ./r2 -m "Complete these packages"
+# Or from a member/subdirectory, using a registered name or a cwd-relative worktree root:
+relay repo finish r2
+```
+
+At least one target is required. Every target must identify a distinct current member. Only selected
+members must be fully reviewed, including the last staged approvals; other members may have staged,
+unstaged, or untracked changes. The command requires an active session in the human phase. It keeps
+the normal workspace and member locks and consistency checks; unavailable or unstable members still
+need attention before a lifecycle operation can proceed.
+
+Selected members finish with the same result commits and branch behavior as `relay finish`.
+Unchanged selected members return to their origin without an empty commit. The entire batch,
+including removal from the member list and per-member message overrides, is one recoverable
+transaction. A failure rolls it back. Unselected members keep their HEAD, index, review history,
+messages, next-turn mode, and conversation ownership.
+
+Message priority remains per-member override, then this command's `-m`, then the saved shared message.
+Only selected members need messages. If a required message is missing, one editor opens using the
+first selected member in repository-name order. `-m` and editor input apply only to this finish;
+they do not change the shared message for remaining members.
+
+The remaining session keeps its ID and workspace root, even with one member left. Finishing the
+last member ends the session. Later status, diff, suspend, resume, finish, and abort cover only the
+remaining members; they do not undo completed results. Other suspended sessions retain their own
+membership. A completed repository may be added again, using its current HEAD as a new immutable
+base and a fresh member ID; its earlier result is not folded into the new result commit.
+
+A finished repository is no longer a discovery entry for this session. If the agent was started
+there, start a new agent session from the common parent or a remaining member. Completing a later
+addition leaves the original member's entry intact. Hooks in an active workspace retain their
+existing Git guard, which also blocks direct agent Git commands targeting unrelated repositories.
+Normal human Git usage is unaffected. In a standalone session, `relay repo finish .` finishes that
+session like `relay finish`, with the same human-phase requirement as other `repo finish` calls.
 
 ## Review and inspection
 
@@ -111,9 +152,9 @@ always prefers each member's override. Explicit `finish -m` replaces only the sh
 that finish; members without overrides use it, or the saved shared description when `-m` is omitted.
 If every member has an override, no shared description or editor is needed. Otherwise, when the
 shared description is missing, finish opens one editor to supply it for members without overrides.
-The first member in repository-name order supplies Git editor/template configuration. Editing holds
-no locks; saving rechecks the group and all member review states. Workspace metadata stores
-descriptions/overrides, and member descriptions also use native Git refs.
+The first selected member in repository-name order supplies Git editor/template configuration.
+Editing holds no locks; saving rechecks the group and selected member review states. Workspace
+metadata stores descriptions/overrides, and member descriptions also use native Git refs.
 
 Finish requires every member's workspace to equal its index, including approvals staged since the
 last handoff. Changed members need a public Git identity. Each gets one result commit, parented by
@@ -143,4 +184,4 @@ and leaves current code in place.
 This provides a recoverable group lifecycle; Git does not supply an atomic transaction spanning
 repositories. Relay locks do not exclude editors or Git UIs. Avoid concurrent mutations during
 lifecycle commands. If a member is unavailable, restore its registered worktree before retrying;
-Relay will not skip it or finish a subset.
+Relay will not silently skip it. Select reviewed members explicitly with `relay repo finish`.

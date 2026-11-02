@@ -48,7 +48,8 @@ relay agent diff human --name-only                 # 例如 service/src/order.ts
 relay agent diff pending --repo service            # 只查看此仓库的 patch
 relay agent git --repo service log --oneline main   # 从此仓库根目录查询历史
 relay message --repo cdk -m "配置订单取消事件"         # 可选的单仓库 commit message
-relay finish                                      # 所有成员都必须完成 review
+relay repo finish ./cdk                            # 完成并移除已 review 的成员
+relay finish                                      # 剩余所有成员完成 review 后结束 session
 ```
 
 Finish 始终优先使用单仓库消息；未设置的成员使用共享消息，`finish -m` 只替换本次使用的共享消息。
@@ -63,10 +64,15 @@ Finish 为每个有净修改的仓库生成一个结果 commit，parent 为该�
 共同父目录的 `.relay/` 保存各 session 自己的成员列表和协调状态。新建多仓库 session 需再次指定
 `--repo`；普通 `relay start` 从当前 Git 包开始。Suspended session 保留原有 scope。
 
-在 active session 的 human turn 中，执行 `relay repo add ../another-package` 可加入一个已有初始
-commit 的干净 Git worktree，只影响当前 session。单仓库 session 会自动以最近公共父目录为根升级
-为多仓库 session，保留原 ID、review 状态和 cwd；已有多仓库 session 保持根目录不变。每次 prompt
-hook 都注入当前 scope；新增包和初始成员使用相同的 diff、review 与生命周期逻辑。
+在 active session 的 human turn 中，执行 `relay repo add ../package-a ../package-b` 可在同一事务中
+加入一个或多个已有初始 commit 的干净 Git worktree，只影响当前 session。单仓库 session 会自动以
+最近公共父目录为根升级为多仓库 session，保留原 ID、review 状态和 cwd；已有多仓库 session 的根目录
+保持不变。每次 prompt hook 都注入当前 scope；新增包和初始成员使用相同的 diff、review 与生命周期逻辑。
+
+在 human phase 中，用 `relay repo finish ./package-a ./package-b [-m "message"]` 完成并移除指定
+成员。仅选中的仓库需要完成 review；剩余成员保留 review 状态、session ID 和 workspace 根目录。
+最后一个成员完成后，session 结束。如果 agent 启动在刚退出的仓库中，需要从公共父目录或剩余成员
+开启新的 agent session。Git guard 的行为保持不变。
 
 成员规则、消息覆盖和失败恢复详见[多仓库会话说明](docs/workspaces.md)。
 
@@ -182,7 +188,8 @@ context。** 普通 Kiro 对话中的 Git 使用不受影响。
 | 命令 | 效果 |
 | --- | --- |
 | `relay start [--repo PATH ...] [-m "message"]` | 从 clean、稳定的 worktrees 开始，可选指定多个仓库和本次工作的说明 |
-| `relay repo add PATH` | 在 active session 的 human turn 中加入一个干净 Git worktree |
+| `relay repo add PATH [PATH ...]` | 在 active session 的 human turn 中加入一个或多个干净 Git worktree |
+| `relay repo finish PATH [PATH ...] [-m "message"]` | 在 human phase 完成并移除指定的已 review 仓库 |
 | `relay message [session] [-m "message"]` | 设置 session 说明；省略 `-m` 则打开 Git 编辑器 |
 | `relay status` | 查看 session 说明、生命周期、reviewed checkpoint、staged approvals 和剩余 proposals |
 | `relay end-interrupted-agent-turn` | 手动中断 Agent 后，在人工 review 前结束尚未关闭的 agent turn |
@@ -240,7 +247,11 @@ Btw 仅提供 `relay btw` 和 `relay btw --cancel` 两个操作。紧急快照�
 review 状态、语义 diff、status 和后续 handoff 之外；需要时可通过 `relay agent git` 查看底层快照。
 Suspend/resume 保留这些 Git 对象和下一轮 btw 选择，finish/abort 随 session 统一清理。
 
-v0.3.0 至 v0.8.2 共用 worktree schema 2，已有 session 无需迁移。
+v0.3.0 至 v0.10.0 共用 worktree schema 2。Workspace coordinator 从 v0.9.0 开始使用 schema 2；
+已有 v0.9.0 session 无需迁移或重装 hooks。
+部分仓库提前完成和一次添加多个仓库见 [v0.10.0 release notes](docs/releases/v0.10.0.md)。
+动态加入仓库及从 v0.8.x 升级 workspace metadata 的说明见
+[v0.9.0 release notes](docs/releases/v0.9.0.md)。
 `relay start --repo` 路径报错改进见 [v0.8.2 release notes](docs/releases/v0.8.2.md)。
 修改 ignore 规则后的 finish 检查修复见 [v0.8.1 release notes](docs/releases/v0.8.1.md)。
 Codex、Claude Code 支持和 macOS CI 修复见 [v0.8.0 release notes](docs/releases/v0.8.0.md)。

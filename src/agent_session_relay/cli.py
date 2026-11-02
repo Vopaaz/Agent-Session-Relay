@@ -47,9 +47,21 @@ def parser() -> argparse.ArgumentParser:
     repo = commands.add_parser("repo", help="manage the active session's repositories")
     repo_commands = repo.add_subparsers(dest="repo_command", required=True)
     add = repo_commands.add_parser(
-        "add", help="add a clean Git worktree during the active session's human phase",
+        "add", help="add clean Git worktrees during the active session's human phase",
     )
-    add.add_argument("path", metavar="PATH", help="worktree root, relative to cwd")
+    add.add_argument("paths", nargs="+", metavar="PATH", help="worktree roots, relative to cwd")
+    repo_finish = repo_commands.add_parser(
+        "finish", help="finish selected repositories and remove them from the active session",
+        description=(
+            "Finish selected repositories during the human phase. Other members may still have "
+            "pending changes. Finished repositories leave the session; continue from the "
+            "workspace directory or a remaining member."
+        ),
+    )
+    repo_finish.add_argument(
+        "paths", nargs="+", metavar="PATH",
+        help="registered repository names or cwd-relative roots",
+    )
     message = commands.add_parser("message", help="set or replace a session's final commit message")
     message.add_argument(
         "-m",
@@ -84,15 +96,16 @@ def parser() -> argparse.ArgumentParser:
     finish = commands.add_parser(
         "finish", help="create one public result commit from reviewed code"
     )
-    finish.add_argument(
-        "-m",
-        "--message",
-        action="append",
-        help=(
-            "override the saved session/shared message; workspace repository overrides take "
-            "priority; open the Git editor only when a required message is missing"
-        ),
-    )
+    for finishing in (finish, repo_finish):
+        finishing.add_argument(
+            "-m",
+            "--message",
+            action="append",
+            help=(
+                "override the saved session/shared message for this finish; workspace repository "
+                "overrides take priority; open the Git editor when a required message is missing"
+            ),
+        )
     commands.add_parser(
         "abort", help="terminate after one confirmation, preserving a recovery branch"
     )
@@ -200,6 +213,7 @@ def confirm_abort(session_id: str, branches: dict | None = None) -> bool:
 
 
 def execute(args, paths: list[str]) -> int:
+    repo_finish = args.command == "repo" and args.repo_command == "finish"
     if getattr(args, "harness", None):
         label, adapter = HARNESSES[args.harness]
         if args.integration_command == "hook":
@@ -226,10 +240,13 @@ def execute(args, paths: list[str]) -> int:
             name = workspace.repository(args.git_args[1])
             return run_readonly_git(args.git_args[2:], cwd=str(workspace.root / name))
         return run_readonly_git(args.git_args)
-    if args.command == "repo":
-        relay, session = add_repository(args.path)
-        name = relay.repository(args.path, session)
-        print(f"Repository added: {name}\nSession: {session['id']}\nWorkspace: {relay.root}")
+    if args.command == "repo" and args.repo_command == "add":
+        relay, session = add_repository(args.paths)
+        names = [relay.repository(path, session) for path in args.paths]
+        label = "Repository" if len(names) == 1 else "Repositories"
+        print(
+            f"{label} added: {', '.join(names)}\nSession: {session['id']}\nWorkspace: {relay.root}"
+        )
         print("Repositories: " + ", ".join(sorted(session["members"])))
         return 0
     if args.command == "list":
@@ -341,8 +358,15 @@ def execute(args, paths: list[str]) -> int:
     elif args.command == "resume":
         session = relay.resume(args.session)
         print(f"Relay session resumed: {session['id']}\nStaged and unstaged review state restored.")
-    elif args.command == "finish":
-        branch = relay.finish(message, editor=lambda initial: edit_message(relay.git, initial))
+    elif args.command == "finish" or repo_finish:
+        if repo_finish and (
+            len(args.paths) != 1 or Path(args.paths[0]).resolve() != relay.git.root.resolve()
+        ):
+            raise RelayError("Repository finish must name the active worktree root exactly once.")
+        branch = relay.finish(
+            message, editor=lambda initial: edit_message(relay.git, initial),
+            require_human=repo_finish,
+        )
         print(
             f"Relay session finished. Switched to {branch}.\n"
             "One result commit; its only parent is the immutable session base.\n"
@@ -373,16 +397,22 @@ def execute(args, paths: list[str]) -> int:
 
 def execute_workspace(args, paths: list[str], relay: Workspace, message: str | None) -> int:
     command = args.command
+    repo_finish = command == "repo" and args.repo_command == "finish"
 
     def editor(initial):
-        return edit_message(relay.editor_git(getattr(args, "session", None)), initial)
+        if repo_finish:
+            name = min(relay.repository(path) for path in args.paths)
+            git = Git(relay.root / name)
+        else:
+            git = relay.editor_git(getattr(args, "session", None))
+        return edit_message(git, initial)
 
     if command == "start":
         session = relay.start(message, repos=args.repos)
         print(f"Relay workspace session started: {session['id']}\nWorkspace: {relay.root}")
         print("Repositories: " + ", ".join(session["members"]))
         print(f"Message: {message_subject(session['message'])}")
-        print("Review in each repository's Git UI; all repositories finish together.")
+        print("Review in each repository's Git UI; finish all members or use `relay repo finish`.")
     elif command == "message":
         session = relay.set_message(message, args.session, editor=editor, repo=args.repo)
         print(f"Session message updated: {session['id']}\n{session['message']}")
@@ -436,15 +466,31 @@ def execute_workspace(args, paths: list[str], relay: Workspace, message: str | N
     elif command == "resume":
         session = relay.resume(args.session)
         print(f"Relay workspace session resumed: {session['id']}\nAll review states restored.")
-    elif command == "finish":
-        results = relay.finish(message, editor=editor)
-        print("Relay workspace session finished.")
+    elif command == "finish" or repo_finish:
+        results = relay.finish(message, editor=editor, repos=args.paths if repo_finish else None)
+        print(
+            "Repositories finished and removed from the Relay session."
+            if repo_finish else "Relay workspace session finished."
+        )
         for name, result in results.items():
             if result["branch"]:
                 print(f"  {name}: {result['branch']} ({result['commit']})")
             else:
                 print(f"  {name}: no net changes; returned to {describe_origin(result['origin'])}")
         print("Each changed repository has one result commit, parented by its own session base.")
+        if repo_finish:
+            state = relay.store.load()
+            remaining = state["sessions"].get(state["active"])
+            if remaining is None:
+                print("Relay workspace session finished; no repositories remain.")
+            else:
+                print(f"Session continues: {remaining['id']}\nWorkspace: {relay.root}")
+                print("Remaining repositories: " + ", ".join(sorted(remaining["members"])))
+                if relay.active(state, required=False) is None:
+                    print(
+                        "This working directory has left the session. Start a new agent session "
+                        "from the workspace directory or a remaining repository to continue."
+                    )
     elif command == "abort":
         relay.store.assert_ready()
         session = relay.active(relay.store.load())

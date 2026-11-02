@@ -17,8 +17,127 @@ from tests.test_workspace import WorkspaceTest
 
 
 class RepositoryAddTests(WorkspaceTest):
-    def add(self, path="../r2", **kwargs):
-        return self.run_relay("repo", "add", path, **kwargs)
+    def add(self, path="../r2", *paths, **kwargs):
+        return self.run_relay("repo", "add", path, *paths, **kwargs)
+
+    def test_batch_promotion_uses_all_paths_and_preserves_the_original_review_state(self):
+        packages = self.parent / "packages"
+        packages.mkdir()
+        self.repo.rename(packages / "r1")
+        self.repo = packages / "r1"
+        self.other.rename(packages / "r2")
+        self.other = packages / "r2"
+        third = self.parent / "r3"
+        self.git("clone", str(self.other), str(third))
+        self.run_relay("start", "-m", "Shared feature")
+        self.hook("prompt-submit")
+        self.hook("agent-stop")
+        self.write("Token.kt", "approved\n")
+        self.git("add", "Token.kt")
+        self.write("Token.kt", "unstaged\n")
+        before = self.metadata()
+        index = self.git("write-tree")
+        refs = self.git("for-each-ref", "refs/relay/")
+        output = self.add("../../r2", "../../../r3", cwd=self.repo / "subdir").stdout
+        self.assertIn("Repositories added: packages/r2, r3", output)
+        group = self.group()
+        self.assertEqual(set(group["members"]), {"packages/r1", "packages/r2", "r3"})
+        expected = copy.deepcopy(before)
+        expected["sessions"][group["id"]]["coordinator"] = str(self.parent / ".relay/state.json")
+        self.assertEqual(self.metadata(), expected)
+        self.assertEqual(self.git("write-tree"), index)
+        self.assertEqual(self.git("for-each-ref", "refs/relay/"), refs)
+        self.assertEqual(self.read("Token.kt"), "unstaged\n")
+        for path in (self.other, third):
+            status = json.loads(self.run_relay("status", "--json", cwd=path).stdout)
+            self.assertEqual(status["session"], group["id"])
+            self.assertEqual(status["turn"], 1)
+            self.assertEqual(status["message"], "Shared feature")
+
+    def test_batch_add_to_workspace_preserves_existing_members_and_next_turn_mode(self):
+        third = self.parent / "r3"
+        self.git("clone", str(self.other), str(third))
+        self.ws("start", "--repo", "r1", "-m", "Shared feature")
+        self.hook("prompt-submit")
+        self.hook("agent-stop")
+        self.run_relay("btw")
+        before = copy.deepcopy(self.group())
+        self.add("../r2", "../r3")
+        group = self.group()
+        expected = copy.deepcopy(before)
+        expected["members"].update({
+            name: group["members"][name] for name in ("r2", "r3")
+        })
+        self.assertEqual(group, expected)
+        self.assertEqual(len({member["id"] for member in group["members"].values()}), 3)
+        for path in (self.other, third):
+            local = Relay(Git(path), coordinator=str(self.workspace().store.path))
+            session = local.active(local.store.load())
+            self.assertEqual(session["turn"], 1)
+            self.assertEqual(session["next_turn"], "btw")
+            self.assertEqual(session["base_commit"], self.base)
+        self.run_relay("suspend")
+        self.run_relay("resume", cwd=third)
+        self.assertEqual(self.group(), group)
+
+    def test_invalid_batch_does_not_enroll_any_target(self):
+        third = self.parent / "r3"
+        self.git("clone", str(self.other), str(third))
+        (third / "dirty.txt").write_text("preserve\n")
+        for workspace in (False, True):
+            with self.subTest(workspace=workspace):
+                if workspace:
+                    self.ws("start", "--repo", "r1", "-m", "Feature")
+                else:
+                    self.run_relay("start", "-m", "Feature")
+                before = self.metadata()
+                group = copy.deepcopy(self.group()) if workspace else None
+                for path in ("../missing", "../r2", "../r2/../r2", ".", "../r2/subdir", "../r3"):
+                    with self.subTest(path=path):
+                        self.add("../r2", path, ok=False)
+                        self.assertEqual(self.metadata(), before)
+                        if workspace:
+                            self.assertEqual(self.group(), group)
+                        else:
+                            self.assertFalse((self.parent / ".relay/state.json").exists())
+                        self.assertEqual(
+                            self.git("symbolic-ref", "--short", "HEAD", cwd=self.other), "main\n",
+                        )
+                        self.assertEqual(
+                            self.git("for-each-ref", "refs/relay/", cwd=self.other), "",
+                        )
+                self.run_relay("finish")
+
+    def test_failure_on_second_batch_member_rolls_back_all_enrollments(self):
+        third = self.parent / "r3"
+        self.git("clone", str(self.other), str(third))
+        self.run_relay("start", "-m", "Feature")
+        self.write("Token.kt", "approved\n")
+        self.git("add", "Token.kt")
+        self.write("Token.kt", "unstaged\n")
+        before = self.metadata()
+        start = Relay.start
+        started = []
+
+        def fail_second(relay, *args, **kwargs):
+            started.append(relay.git.root)
+            if relay.git.root == third:
+                raise OSError("second enrollment failed")
+            return start(relay, *args, **kwargs)
+
+        with patch.object(Relay, "start", fail_second):
+            with self.assertRaisesRegex(OSError, "second enrollment failed"):
+                add_repository(["../r2", "../r3"], self.repo)
+        self.assertEqual(started, [self.other, third])
+        self.assertEqual(self.metadata(), before)
+        self.assertNotIn("repositories", self.state())
+        self.assertEqual(self.git("show", ":Token.kt"), "approved\n")
+        self.assertEqual(self.read("Token.kt"), "unstaged\n")
+        for path in (self.other, third):
+            self.assertEqual(self.git("symbolic-ref", "--short", "HEAD", cwd=path), "main\n")
+            self.assertEqual(self.git("for-each-ref", "refs/relay/", cwd=path), "")
+            self.assertEqual(self.git("status", "--porcelain", cwd=path), "")
+        self.add("../r2", "../r3")
 
     def test_single_promotion_preserves_reviews_and_all_commands_use_session_members(self):
         self.run_relay("start", "-m", "Shared feature")
@@ -267,7 +386,9 @@ class RepositoryAddTests(WorkspaceTest):
         self.assertEqual(self.group()["message"], "Updated before enrollment")
         self.run_relay("finish")
 
-    def test_crash_during_promotion_is_recoverable_from_both_members(self):
+    def test_crash_during_batch_promotion_is_recoverable_from_all_members(self):
+        third = self.parent / "r3"
+        self.git("clone", str(self.other), str(third))
         self.run_relay("start", "-m", "Feature")
         before = self.metadata()
         self.crash(
@@ -277,13 +398,13 @@ class RepositoryAddTests(WorkspaceTest):
             "    result=original(self,*args,**kwargs)\n"
             "    os._exit(77)\n"
             "with patch.object(Relay,'start',crash_after_start):\n"
-            "    add_repository('../r2','r1')\n"
+            "    add_repository(['../r2','../r3'],'r1')\n"
         )
-        for repo in (self.repo, self.other):
+        for repo in (self.repo, self.other, third):
             self.ws("kiro", "hook", "prompt-submit", cwd=repo, ok=False)
             self.git("gc", "--prune=now", cwd=repo)
         (self.other / "late.txt").write_text("later work\n")
-        self.ws("recover", cwd=self.other / "subdir")
+        self.ws("recover", cwd=third)
         self.assertEqual(self.metadata(), before)
         self.assertNotIn("repositories", self.state())
         self.assertFalse(json.loads(self.ws("agent", "status", cwd=self.other).stdout)["active"])
@@ -291,9 +412,11 @@ class RepositoryAddTests(WorkspaceTest):
             "for-each-ref", "--format=%(refname)", "refs/heads/relay/recovered/", cwd=self.other,
         ).strip()
         self.assertEqual(self.git("show", branch + ":late.txt", cwd=self.other), "later work\n")
-        self.add()
+        self.add("../r2", "../r3")
 
     def test_crash_after_add_commit_keeps_members_and_only_finishes_cleanup(self):
+        third = self.parent / "r3"
+        self.git("clone", str(self.other), str(third))
         self.run_relay("start", "-m", "Feature")
         self.crash(
             "from agent_session_relay.core.workspace import add_repository\n"
@@ -302,11 +425,11 @@ class RepositoryAddTests(WorkspaceTest):
             "    original(self,journal)\n"
             "    os._exit(77)\n"
             "with patch.object(Store,'complete',crash_during_cleanup):\n"
-            "    add_repository('../r2','r1')\n"
+            "    add_repository(['../r2','../r3'],'r1')\n"
         )
         (self.other / "late.txt").write_text("keep in place\n")
         self.run_relay("recover", cwd=self.other)
-        self.assertEqual(set(self.state()["repositories"]), {"r1", "r2"})
+        self.assertEqual(set(self.state()["repositories"]), {"r1", "r2", "r3"})
         self.assertEqual((self.other / "late.txt").read_text(), "keep in place\n")
         self.run_relay("abort", input="abort\n")
 
@@ -371,8 +494,8 @@ class RepositoryAddTests(WorkspaceTest):
         linked = self.parent / "linked"
         self.git("worktree", "add", "-b", "linked-base", str(linked))
         self.run_relay("start", "-m", "Both worktrees")
-        self.add("../linked")
-        for repo in (self.repo, linked):
+        self.add("../r2", "../linked")
+        for repo in (self.repo, self.other, linked):
             (repo / "Token.kt").write_text(repo.name + "\n")
             self.git("add", ".", cwd=repo)
         self.run_relay("finish", cwd=linked)

@@ -28,6 +28,14 @@ Diff filters remain relative to cwd. Schema-1 coordinator state and journals are
 into session-owned membership; the next successful mutation saves schema 2. Inspection does not
 rewrite legacy metadata or change other sessions.
 
+`relay repo finish` selects members for human-phase completion. The coordinator locks and validates
+the group, but checks approval and required messages only for selected members. It completes those
+members and removes their membership/message overrides in one transaction. Remaining members keep
+their local review state, group identity, and root; an empty group is deleted. The journal retains
+the original member list so recovery can find completed members even after the saved active scope
+has shrunk. Finishing a repository removes its discovery entry; no routing alias or Git guard
+exception is retained. Re-adding it creates a new member based on its current HEAD.
+
 `MetadataStore` supplies versioned JSON and locks. `Store.prepare()` separates creation of a recovery
 journal from its commit point so the coordinator can prepare every member before invoking existing
 `Relay` methods. Those methods reuse their prepared journal and already-held lock. All previous

@@ -412,7 +412,8 @@ class Relay:
             return copy.deepcopy(session)
 
     def finish(
-        self, message: str | None = None, *, editor: Callable[[str | None], str] | None = None
+        self, message: str | None = None, *, editor: Callable[[str | None], str] | None = None,
+        require_human: bool = False,
     ) -> str:
         expected_session = None
         # An editor may stay open for a long time. Release the lock while it runs, then
@@ -430,6 +431,10 @@ class Relay:
                         "Review the current session before retrying."
                     )
                 session = self.active(state)
+                if require_human and session["phase"] != "human":
+                    raise RelayError(
+                        "Repository finishes require the human phase. Wait for Agent Stop."
+                    )
                 self.validate(session)
                 workspace = self.workspace_tree(session)
                 approved = self.git.index_tree()
